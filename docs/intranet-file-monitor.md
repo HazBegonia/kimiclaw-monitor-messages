@@ -1,0 +1,45 @@
+# 内网页面字段监控
+
+`src.intranet_filename_monitor` 支持常驻轮询，也支持由 OpenClaw cron 定期调用 `--once` 完成单次扫描。若只想启动一个 OpenClaw，使用项目脚本注册分钟级 cron：
+
+```powershell
+.\scripts\register-openclaw-intranet-cron.ps1
+```
+
+该任务每轮调用 `scripts/run-intranet-monitor.ps1 -Mode Once`，因此不会叠加多个常驻 Python 进程。调度频率和 Python 的扫描参数配置在 `config/openclaw-intranet-cron.json`，查看或删除任务：
+
+```powershell
+.\scripts\register-openclaw-intranet-cron.ps1 -Action List
+.\scripts\register-openclaw-intranet-cron.ps1 -Action Remove -JobId <任务ID>
+```
+
+需要约 5 秒准实时性时，仍应直接运行常驻模式：
+
+```powershell
+python -m src.intranet_filename_monitor --interval 5
+```
+
+版本选择配置位于 `config/intranet-versions.json`。例如：
+
+```json
+{
+  "selectedVersions": [
+    { "id": "103300110002", "match": "103300110002" }
+  ]
+}
+```
+
+每次成功扫描都会为每个选中版本写入全量快照：
+`logs/intranet-focus/<version-id>/*.log`。快照包含该版本当前所有匹配的 CSV 文件名，即使本轮没有变化。
+
+同时保留通用变化日志：首次成功请求只建立 `state/intranet-files.json` 基线；全局文件集合无变化时不写 `logs/intranet-diff/*.log`，发生新增或删除时才写入变化日志。版本列表为空时不生成版本快照，但通用变化监控仍然工作。
+
+版本快照只记录文件名和元数据，不下载或解析 CSV 正文。每次扫描都会产生快照文件，请根据磁盘容量维护日志保留策略。
+
+变化日志还可选 POST OpenClaw：
+
+```powershell
+python -m src.intranet_filename_monitor --event-url http://127.0.0.1:3000/events --event-token SECRET
+```
+
+投递失败的事件保存在 `state/openclaw-pending/`。请求失败或异常页面保留旧状态，不误判删除。服务无 SSE/WebSocket/Webhook/ETag/Last-Modified，只能轮询准实时；页面约 1.33 MB，5 秒约 22.9 GiB/天，1 秒仅适合短测。本 change 不下载 CSV 正文，也不处理企业微信、钉钉。

@@ -38,4 +38,6 @@ claw 监视 web -> 监测到 web 有消息 -> claw 获取到 web 的消息并通
 - flow2：
 提前写好的 py 脚本用 cron 定时监测所有 .log 文件的异常 -> 若有监测到异常则发送到企业微信
 
-目前公司需要监视的 web 的 url 未知（还在问，先空着）；企业微信也还未知（还在问，先改为把消息输出到本地文件）。
+目前公司需要监视的内网 web 的 url 为[Directory listing for /](http://172.16.30.20:8011/)（本机可以直接访问）；企业微信未知（还在问，先改为把消息输出到本地 .log 日志文件）。
+
+约束：本机生成的任何文件都要放在 C:\Users\ELadmin\Desktop\program\kimiclaw-monitor-messages 这里，全局配置除外。

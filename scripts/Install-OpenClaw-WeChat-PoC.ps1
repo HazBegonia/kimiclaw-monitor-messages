@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$InstallOpenClaw,
     [switch]$InstallWeChatPlugin,
@@ -28,7 +28,7 @@ function Get-RequiredCommand {
         Stop-PoC "Missing required command '$Name'. $Guidance"
     }
 
-    Write-Host "Found $Name: $($command.Source)"
+    Write-Host "Found ${Name}: $($command.Source)"
 }
 
 function Test-NodeAndNpm {

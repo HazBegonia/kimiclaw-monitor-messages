@@ -1,4 +1,8 @@
 __pycache__/
 *.pyc
 *.log
-raw/
+.kimi-code/
+.pytest_cache/
+.tmp/
+state/
+.agents/

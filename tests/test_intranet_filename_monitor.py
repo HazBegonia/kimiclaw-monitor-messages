@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.intranet_filename_monitor import (diff_filenames, filter_version_files,
-    load_selected_versions, parse_filenames, run_once, write_diff_log, validate_page)
+    load_selected_versions, parse_filenames, record_error, run_once, write_diff_log, validate_page)
 
 
 def test_parse_python_directory_listing_filters_non_root_links():
@@ -128,3 +128,86 @@ def test_failed_scan_does_not_write_version_snapshot(tmp_path, monkeypatch):
     except TimeoutError:
         pass
     assert len(list((tmp_path / "focus" / "v1").glob("*.log"))) == 1
+
+
+def test_failed_scan_writes_daily_raw_error_and_preserves_state(tmp_path, monkeypatch):
+    state, logs = tmp_path / "state.json", tmp_path / "logs"
+    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: {"a.csv"})
+    run_once("http://example/", state, logs, 1, error_log_dir=tmp_path / "errors")
+    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: (_ for _ in ()).throw(TimeoutError("Bearer secret-token")))
+    with __import__("pytest").raises(TimeoutError):
+        run_once("http://user:pass@example/path?token=secret", state, logs, 1, error_log_dir=tmp_path / "errors")
+    error_file = list((tmp_path / "errors").glob("*.log"))[0]
+    rows = [json.loads(line) for line in error_file.read_text(encoding="utf-8").splitlines()]
+    row = rows[-1]
+    assert {"eventId", "detectedAt", "monitorId", "mode", "phase", "errorType", "message", "path", "url", "statePreserved", "retryable"} <= row.keys()
+    assert row["phase"] == "fetch_page"
+    assert row["statePreserved"] is True
+    assert "secret-token" not in row["message"]
+    assert "token=secret" not in row["url"]
+    assert json.loads(state.read_text(encoding="utf-8"))["files"] == ["a.csv"]
+
+
+def test_record_error_falls_back_to_stderr_when_directory_unwritable(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(Path, "mkdir", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    result = record_error(tmp_path / "errors", monitor_id="intranet-root", mode="once", phase="write_state", error=RuntimeError("oops"), url="http://example/?token=hidden")
+    assert result is None
+    assert "error log unavailable" in capsys.readouterr().err
+
+
+def test_page_validation_failure_is_logged_with_validation_phase(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "src.intranet_filename_monitor.fetch_page",
+        lambda *_: ("<html><title>Error</title><h1>Error</h1></html>", 42, 0.01),
+    )
+    with __import__("pytest").raises(RuntimeError):
+        run_once(
+            "http://example/",
+            tmp_path / "state.json",
+            tmp_path / "logs",
+            1,
+            error_log_dir=tmp_path / "errors",
+        )
+    row = json.loads(next((tmp_path / "errors").glob("*.log")).read_text(encoding="utf-8"))
+    assert row["phase"] == "validate_page"
+
+
+def test_main_once_returns_nonzero_after_recording_scan_error(tmp_path):
+    from src.intranet_filename_monitor import main
+
+    code = main(["--once", "--url", "http://127.0.0.1:1/", "--error-log-dir", str(tmp_path / "errors")])
+    assert code == 1
+    row = json.loads(next((tmp_path / "errors").glob("*.log")).read_text(encoding="utf-8"))
+    assert row["mode"] == "once"
+    assert row["phase"] == "fetch_page"
+
+
+def test_main_records_malformed_versions_config(tmp_path):
+    from src.intranet_filename_monitor import main
+
+    config = tmp_path / "versions.json"
+    config.write_text("{broken", encoding="utf-8")
+    code = main(["--once", "--versions-config", str(config), "--error-log-dir", str(tmp_path / "errors")])
+    assert code == 1
+    row = json.loads(next((tmp_path / "errors").glob("*.log")).read_text(encoding="utf-8"))
+    assert row["phase"] == "read_config"
+    assert row["path"] == str(config)
+
+
+def test_malformed_state_and_state_write_failure_are_recorded(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    state.write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: {"a.csv"})
+    with __import__("pytest").raises(json.JSONDecodeError):
+        run_once("http://example/", state, tmp_path / "logs", 1, error_log_dir=tmp_path / "errors")
+    row = json.loads(next((tmp_path / "errors").glob("*.log")).read_text(encoding="utf-8"))
+    assert row["phase"] == "read_state"
+    assert row["statePreserved"] is False
+
+    monkeypatch.setattr("src.intranet_filename_monitor._write_state", lambda *_: (_ for _ in ()).throw(OSError("disk full")))
+    state.unlink()
+    with __import__("pytest").raises(OSError):
+        run_once("http://example/", state, tmp_path / "logs", 1, error_log_dir=tmp_path / "errors")
+    rows = [json.loads(line) for line in next((tmp_path / "errors").glob("*.log")).read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["phase"] == "write_state"
+    assert rows[-1]["path"] == str(state)

@@ -1,6 +1,6 @@
 """Resident polling monitor for configurable fields in an intranet HTML page."""
 from __future__ import annotations
-import argparse, hashlib, json, sys, time
+import argparse, hashlib, json, re, sys, time, uuid
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -10,6 +10,12 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 DEFAULT_URL="http://172.16.30.20:8011/"; DEFAULT_INTERVAL=5.0; DEFAULT_TIMEOUT=10.0; TIME_ZONE=ZoneInfo("Asia/Shanghai")
+DEFAULT_ERROR_LOG_DIR = Path("logs/intranet-error")
+ERROR_LOG_RETENTION_DAYS = 30
+ERROR_LOG_MAX_BYTES = 100 * 1024 * 1024
+
+class PageValidationError(RuntimeError):
+    """Raised when a fetched page is not a valid directory listing."""
 
 class _DirectoryLinkParser(HTMLParser):
     def __init__(self):
@@ -54,11 +60,11 @@ def validate_page(html: str, *, min_links: int = 0) -> None:
     title = " ".join("".join(parser.title_text).split())
     h1 = " ".join("".join(parser.h1_text).split())
     if "Directory listing for" not in title or "Directory listing for" not in h1:
-        raise RuntimeError("page signature validation failed")
+        raise PageValidationError("page signature validation failed")
     if not html.rstrip().lower().endswith("</html>"):
-        raise RuntimeError("incomplete HTML page")
+        raise PageValidationError("incomplete HTML page")
     if not parser.hrefs or len(parser.hrefs) < min_links:
-        raise RuntimeError("page has too few links")
+        raise PageValidationError("page has too few links")
 
 def fingerprint(snapshot: dict[str,object])->str:
     return hashlib.sha256(json.dumps(snapshot,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode()).hexdigest()
@@ -91,6 +97,77 @@ def _atomic_write(path: Path, content: str):
     try:t.write_text(content,encoding="utf-8",newline="\n"); t.replace(path)
     finally:
         if t.exists():t.unlink()
+
+def _redact(value: object, limit: int = 500) -> str:
+    """Return a short, credential-free diagnostic string."""
+    text = str(value or "")
+    text = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)(token|authorization|api[_-]?key|password)(\s*[:=]\s*)[^\s,;]+", r"\1\2[REDACTED]", text)
+    return text[:limit]
+
+def _safe_url(url: str) -> str:
+    try:
+        p = urlsplit(url)
+        host = p.hostname or ""
+        if p.port:
+            host = f"{host}:{p.port}"
+        return p._replace(netloc=host, query="", fragment="").geturl()
+    except Exception:
+        return _redact(url, 300)
+
+def _cleanup_error_logs(log_dir: Path, now: datetime, protected: Path | None = None) -> None:
+    """Best-effort 30-day and 100MB retention for daily error logs."""
+    try:
+        files = sorted(log_dir.glob("*.log"))
+        cutoff = now.timestamp() - ERROR_LOG_RETENTION_DAYS * 86400
+        for path in files:
+            if path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        files = sorted((p for p in log_dir.glob("*.log") if p.exists()), key=lambda p: p.stat().st_mtime)
+        total = sum(p.stat().st_size for p in files)
+        for path in files:
+            if total <= ERROR_LOG_MAX_BYTES:
+                break
+            if protected is not None and path == protected:
+                continue
+            size = path.stat().st_size
+            path.unlink(missing_ok=True)
+            total -= size
+    except Exception:
+        return
+
+def record_error(error_log_dir: Path, *, monitor_id: str, mode: str, phase: str,
+                 error: BaseException, url: str | None = None, path: Path | None = None,
+                 state_preserved: bool = False, retryable: bool = True,
+                 detected_at: datetime | None = None,
+                 written_paths: Iterable[str] | None = None) -> dict[str, object] | None:
+    """Persist one raw technical error; fall back to stderr if persistence fails."""
+    dt = detected_at or datetime.now(TIME_ZONE)
+    record = {
+        "eventId": uuid.uuid4().hex,
+        "detectedAt": dt.isoformat(),
+        "monitorId": _redact(monitor_id, 120),
+        "mode": mode,
+        "phase": phase,
+        "errorType": type(error).__name__,
+        "message": _redact(error),
+        "path": _redact(path, 300) if path else None,
+        "url": _safe_url(url) if url else None,
+        "statePreserved": bool(state_preserved),
+        "retryable": bool(retryable),
+    }
+    if written_paths:
+        record["writtenPaths"] = [_redact(item, 300) for item in written_paths]
+    try:
+        error_log_dir.mkdir(parents=True, exist_ok=True)
+        target = error_log_dir / f"{dt.strftime('%Y-%m-%d')}.log"
+        with target.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        _cleanup_error_logs(error_log_dir, dt, target)
+        return record
+    except Exception as log_error:
+        print(f"scan error ({phase}): {_redact(error)}; error log unavailable: {_redact(log_error)}", file=sys.stderr, flush=True)
+        return None
 
 def _write_state(path: Path, snapshot: dict[str,object], checked_at: datetime):
     d={"checkedAt":checked_at.isoformat(),"snapshot":snapshot,"fingerprint":fingerprint(snapshot)}
@@ -185,47 +262,75 @@ def deliver_pending(outbox: Path, event_url: str, timeout: float, token: str|Non
             continue
     return delivered
 
-def run_once(url,state_path,log_dir,timeout,*,event_url=None,outbox=None,event_token=None,monitor_id="intranet-root",min_links=0,profile=None,confirm_polls=1,selected_versions=None,focus_log_dir=Path("logs/intranet-focus")):
-    dt=datetime.now(TIME_ZONE)
-    if profile:
-        html,nbytes,duration=fetch_page(url,timeout); validate_page(html,min_links=min_links); snap=parse_fields(html,url,profile)
-        files=snap.get("root_files",[])
-    else:
-        files=fetch_filenames(url,timeout); nbytes=LAST_FETCH_METRICS["bytes"]; duration=LAST_FETCH_METRICS["duration"]; snap={"root_files":sorted(files)}
-        if len(files)<min_links:raise RuntimeError("page has too few links")
-    for _ in range(max(0, confirm_polls - 1)):
-        check = fetch_filenames(url, timeout)
-        if sorted(check) != sorted(files):
-            raise RuntimeError("page snapshot did not stabilize")
-    prev=_read_state(state_path)
-    version_logs = []
-    if selected_versions:
-        for version, names in filter_version_files(files, selected_versions).items():
-            spec = next(v for v in selected_versions if v["id"] == version)
-            version_logs.append(str(write_snapshot_log(focus_log_dir, spec, names, dt)))
-    if prev is None:
-        _write_state(state_path,snap,dt)
-        return {"baseline":True,"added":[],"removed":[],"log":None,"versionLogs":version_logs,"count":len(files),"bytes":nbytes,"duration":duration}
-    diff=diff_snapshots(prev.get("snapshot",{}),snap); log=write_diff_log(log_dir,diff,dt,monitor_id=monitor_id,previous_fingerprint=prev.get("fingerprint","") ,current_fingerprint=fingerprint(snap)); _write_state(state_path,snap,dt)
-    if log and event_url:
-        event_key=f"{monitor_id}|{prev.get('fingerprint','')}|{fingerprint(snap)}|{Path(log).name}"
-        payload={"event_id":hashlib.sha256(event_key.encode()).hexdigest(),"monitor_id":monitor_id,"log_path":str(log),"detected_at":dt.isoformat()}
-        try:_send_event(event_url,payload,timeout,event_token)
+def run_once(url,state_path,log_dir,timeout,*,event_url=None,outbox=None,event_token=None,monitor_id="intranet-root",min_links=0,profile=None,confirm_polls=1,selected_versions=None,focus_log_dir=Path("logs/intranet-focus"),error_log_dir=DEFAULT_ERROR_LOG_DIR,mode="once"):
+    dt=datetime.now(TIME_ZONE); phase = "fetch_page"; state_preserved = state_path.exists(); operation_path = None; written_paths = []
+    try:
+        if profile:
+            html,nbytes,duration=fetch_page(url,timeout); phase = "validate_page"; validate_page(html,min_links=min_links); snap=parse_fields(html,url,profile)
+            files=snap.get("root_files",[])
+        else:
+            try:
+                files=fetch_filenames(url,timeout)
+            except PageValidationError:
+                phase = "validate_page"
+                raise
+            nbytes=LAST_FETCH_METRICS["bytes"]; duration=LAST_FETCH_METRICS["duration"]; snap={"root_files":sorted(files)}
+            phase = "validate_page"
+            if len(files)<min_links:raise PageValidationError("page has too few links")
+        phase = "confirm_poll"
+        for _ in range(max(0, confirm_polls - 1)):
+            check = fetch_filenames(url, timeout)
+            if sorted(check) != sorted(files):
+                raise RuntimeError("page snapshot did not stabilize")
+        phase = "read_state"
+        try:
+            prev=_read_state(state_path)
         except Exception:
-            if outbox:outbox.mkdir(parents=True,exist_ok=True); _queue_event(outbox,payload)
-    root_diff=diff.get("root_files", {}) if isinstance(diff.get("root_files", {}), dict) else {}
-    return {"baseline":False,"added":root_diff.get("added",[]),"removed":root_diff.get("removed",[]),"log":str(log) if log else None,"versionLogs":version_logs,"count":len(files),"bytes":nbytes,"duration":duration}
+            state_preserved = False
+            raise
+        state_preserved = prev is not None
+        version_logs = []
+        if selected_versions:
+            phase = "write_snapshot_log"
+            for version, names in filter_version_files(files, selected_versions).items():
+                spec = next(v for v in selected_versions if v["id"] == version)
+                operation_path = focus_log_dir / version
+                snapshot_path = write_snapshot_log(focus_log_dir, spec, names, dt)
+                written_paths.append(str(snapshot_path)); version_logs.append(str(snapshot_path))
+        if prev is None:
+            phase = "write_state"; operation_path = state_path; _write_state(state_path,snap,dt); written_paths.append(str(state_path))
+            return {"baseline":True,"added":[],"removed":[],"log":None,"versionLogs":version_logs,"count":len(files),"bytes":nbytes,"duration":duration}
+        phase = "write_diff_log"; operation_path = log_dir; diff=diff_snapshots(prev.get("snapshot",{}),snap); log=write_diff_log(log_dir,diff,dt,monitor_id=monitor_id,previous_fingerprint=prev.get("fingerprint","") ,current_fingerprint=fingerprint(snap));
+        if log:
+            written_paths.append(str(log))
+        phase = "write_state"; operation_path = state_path; _write_state(state_path,snap,dt)
+        written_paths.append(str(state_path))
+        if log and event_url:
+            event_key=f"{monitor_id}|{prev.get('fingerprint','')}|{fingerprint(snap)}|{Path(log).name}"
+            payload={"event_id":hashlib.sha256(event_key.encode()).hexdigest(),"monitor_id":monitor_id,"log_path":str(log),"detected_at":dt.isoformat()}
+            try:_send_event(event_url,payload,timeout,event_token)
+            except Exception:
+                if outbox:outbox.mkdir(parents=True,exist_ok=True); _queue_event(outbox,payload)
+        root_diff=diff.get("root_files", {}) if isinstance(diff.get("root_files", {}), dict) else {}
+        return {"baseline":False,"added":root_diff.get("added",[]),"removed":root_diff.get("removed",[]),"log":str(log) if log else None,"versionLogs":version_logs,"count":len(files),"bytes":nbytes,"duration":duration}
+    except Exception as error:
+        record_error(error_log_dir, monitor_id=monitor_id, mode=mode, phase=phase, error=error, url=url, path=operation_path, state_preserved=state_preserved, written_paths=written_paths)
+        raise
 
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--url",default=DEFAULT_URL); p.add_argument("--interval",type=float,default=DEFAULT_INTERVAL); p.add_argument("--timeout",type=float,default=DEFAULT_TIMEOUT); p.add_argument("--confirm-polls",type=int,default=1); p.add_argument("--state",type=Path,default=Path("state/intranet-files.json")); p.add_argument("--log-dir",type=Path,default=Path("logs/intranet-diff")); p.add_argument("--focus-log-dir",type=Path,default=Path("logs/intranet-focus")); p.add_argument("--versions-config",type=Path,default=Path("config/intranet-versions.json")); p.add_argument("--profile",type=Path,help="JSON field profile"); p.add_argument("--event-url"); p.add_argument("--event-token"); p.add_argument("--outbox",type=Path,default=Path("state/openclaw-pending")); p.add_argument("--once",action="store_true"); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--url",default=DEFAULT_URL); p.add_argument("--interval",type=float,default=DEFAULT_INTERVAL); p.add_argument("--timeout",type=float,default=DEFAULT_TIMEOUT); p.add_argument("--confirm-polls",type=int,default=1); p.add_argument("--state",type=Path,default=Path("state/intranet-files.json")); p.add_argument("--log-dir",type=Path,default=Path("logs/intranet-diff")); p.add_argument("--focus-log-dir",type=Path,default=Path("logs/intranet-focus")); p.add_argument("--error-log-dir",type=Path,default=DEFAULT_ERROR_LOG_DIR); p.add_argument("--versions-config",type=Path,default=Path("config/intranet-versions.json")); p.add_argument("--profile",type=Path,help="JSON field profile"); p.add_argument("--event-url"); p.add_argument("--event-token"); p.add_argument("--outbox",type=Path,default=Path("state/openclaw-pending")); p.add_argument("--once",action="store_true"); a=p.parse_args(argv)
     if a.interval<=0 or a.timeout<=0 or a.confirm_polls<=0:print("--interval, --timeout and --confirm-polls must be positive",file=sys.stderr); return 2
     exit_code=0
     while True:
         try:
             if a.event_url: deliver_pending(a.outbox,a.event_url,a.timeout,a.event_token)
-            profile=json.loads(a.profile.read_text(encoding="utf-8")) if a.profile else None
-            versions=load_selected_versions(a.versions_config)
-            r=run_once(a.url,a.state,a.log_dir,a.timeout,event_url=a.event_url,outbox=a.outbox,event_token=a.event_token,profile=profile,confirm_polls=a.confirm_polls,selected_versions=versions,focus_log_dir=a.focus_log_dir)
+            try:
+                profile=json.loads(a.profile.read_text(encoding="utf-8")) if a.profile else None
+                versions=load_selected_versions(a.versions_config)
+            except Exception as e:
+                record_error(a.error_log_dir, monitor_id="intranet-root", mode="once" if a.once else "resident", phase="read_config", error=e, path=a.profile or a.versions_config, state_preserved=a.state.exists())
+                raise
+            r=run_once(a.url,a.state,a.log_dir,a.timeout,event_url=a.event_url,outbox=a.outbox,event_token=a.event_token,profile=profile,confirm_polls=a.confirm_polls,selected_versions=versions,focus_log_dir=a.focus_log_dir,error_log_dir=a.error_log_dir,mode="once" if a.once else "resident")
             if r["baseline"]:print(f"baseline saved: {r['count']} files",flush=True)
             elif r["log"]:print(f"diff: {r['log']}",flush=True)
         except Exception as e:

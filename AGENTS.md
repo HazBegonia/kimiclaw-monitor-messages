@@ -33,11 +33,11 @@
 ## workflow
 
 - flow1：
-claw 监视 web -> 监测到 web 有消息 -> claw 获取到 web 的消息并通过特定的 skill 生成 .log 日志文件 -> claw 通过 skill 对消息做信息重要性处理，筛选出重要的消息 -> 企业微信
+claw 通过 cron 和 py 脚本监视 web -> 监测到 web 有消息生成 .log 日志文件 -> claw 通过 skill 对消息做信息重要性处理，筛选出重要的消息 -> 企业微信
 
 - flow2：
-提前写好的 py 脚本用 cron 定时监测所有 .log 文件的异常 -> 若有监测到异常则发送到企业微信
+py 脚本监视 web 的同时记录错误 -> py 脚本写下 .log 文件，记录异常，生成原始错误日志 -> claw 读取错误日志 -> 通过 claw 的 skill 来判断这个错误对影响业务的重要性 -> 发现重要则发送到企业微信
 
-目前公司需要监视的内网 web 的 url 为[Directory listing for /](http://172.16.30.20:8011/)（本机可以直接访问）；企业微信未知（还在问，先改为把消息输出到本地 .log 日志文件）。
+目前公司需要监视的内网 web 的 url 为[Directory listing for /](http://172.16.30.20:8011/)（本机可以直接访问）；企业微信发到李非凡。
 
 约束：本机生成的任何文件都要放在 C:\Users\ELadmin\Desktop\program\kimiclaw-monitor-messages 这里，全局配置除外。

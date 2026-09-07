@@ -22,6 +22,8 @@
 
 Python 默认读取 `config/intranet-versions.json`。该文件中的 `selectedVersions` 决定哪些版本生成全量快照；例如将 `103300110002` 替换或追加为公司实际选择的版本。快照写入 `logs/intranet-focus/<version-id>/`，通用新增/删除变化仍写入 `logs/intranet-diff/`。
 
+Python 发现扫描或本地持久化错误时，将原始技术错误写入 `logs/intranet-error/YYYY-MM-DD.log`（JSONL）。记录包含错误阶段、异常类型、脱敏上下文、`eventId` 和最近一次成功状态是否保留。当前阶段只生成原始错误日志，不做业务重要性判断、不生成分析日志、不发送企业微信或其他通知；后续再由 Claw skill 读取这些记录。
+
 脚本使用固定 `declaration-key`，重复注册同名任务可复用同一声明。删除时先执行 `-Action List`，再按返回的任务 ID：
 
 ```powershell

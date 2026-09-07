@@ -38,6 +38,8 @@ claw 通过 cron 和 py 脚本监视 web -> 监测到 web 有消息生成 .log �
 - flow2：
 py 脚本监视 web 的同时记录错误 -> py 脚本写下 .log 文件，记录异常，生成原始错误日志 -> claw 读取错误日志 -> 通过 claw 的 skill 来判断这个错误对影响业务的重要性 -> 发现重要则发送到企业微信
 
-目前公司需要监视的内网 web 的 url 为[Directory listing for /](http://172.16.30.20:8011/)（本机可以直接访问）；企业微信发到李非凡。
+目前公司需要监视的内网 web 的 url 为[Directory listing for /](http://172.16.30.20:8011/)（本机可以直接访问）；
+
+由于创建群机器人需要申请，先把消息发送到企业微信邮箱里，发送方是 852285268@qq.com，接收方是26213050235@m.fudan.edu.cn。
 
 约束：本机生成的任何文件都要放在 C:\Users\ELadmin\Desktop\program\kimiclaw-monitor-messages 这里，全局配置除外。

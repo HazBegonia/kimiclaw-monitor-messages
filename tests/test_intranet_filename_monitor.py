@@ -61,7 +61,7 @@ def test_failed_scan_keeps_last_good_state_and_writes_no_log(tmp_path, monkeypat
         lambda *_: (_ for _ in ()).throw(TimeoutError("offline")),
     )
     try:
-        run_once("http://example/", state, logs, 1)
+        run_once("http://example/", state, logs, 1, error_log_dir=tmp_path / "errors")
     except TimeoutError:
         pass
     assert json.loads(state.read_text(encoding="utf-8"))["files"] == ["a.csv"]
@@ -124,7 +124,7 @@ def test_failed_scan_does_not_write_version_snapshot(tmp_path, monkeypatch):
     run_once("http://example/", state, logs, 1, selected_versions=versions, focus_log_dir=tmp_path / "focus")
     monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: (_ for _ in ()).throw(TimeoutError("offline")))
     try:
-        run_once("http://example/", state, logs, 1, selected_versions=versions, focus_log_dir=tmp_path / "focus")
+        run_once("http://example/", state, logs, 1, selected_versions=versions, focus_log_dir=tmp_path / "focus", error_log_dir=tmp_path / "errors")
     except TimeoutError:
         pass
     assert len(list((tmp_path / "focus" / "v1").glob("*.log"))) == 1

@@ -1,0 +1,9 @@
+{
+  "channel": "email",
+  "host": "smtp.qq.com",
+  "port": 465,
+  "username": "your-qq@qq.com",
+  "auth_code": "在此填QQ邮箱SMTP授权码",
+  "from": "your-qq@qq.com",
+  "to": ["recipient@example.com"]
+}

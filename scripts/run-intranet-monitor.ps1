@@ -15,5 +15,10 @@ if ($EventUrl) { $argsList += @('--event-url', $EventUrl) }
 if ($EventToken) { $argsList += @('--event-token', $EventToken) }
 if ($Mode -eq 'Once') { $argsList += '--once' }
 Push-Location $workspace
-try { & python @argsList; exit $LASTEXITCODE }
+try {
+    & python @argsList
+    $monitorExit = $LASTEXITCODE
+    & python -m src.email_notifier
+    exit $monitorExit
+}
 finally { Pop-Location }

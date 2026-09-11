@@ -67,5 +67,26 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "已注册 OpenClaw cron：$JobName（每 $Every 调用 run-intranet-monitor.ps1 -Mode Once）。"
+
+# 可选：triage+推送 agent 任务（flow1/flow2 末端）。配置含 notifyJobName/notifyEvery 时注册。
+$notifyJobName = [string]$config.notifyJobName
+$notifyEvery = [string]$config.notifyEvery
+if ($notifyJobName -and $notifyEvery) {
+    $notifyMessage = @'
+【内网监控 triage 轮次】项目根目录为 C:/Users/ELadmin/Desktop/program/kimiclaw-monitor-messages，下面所有相对路径都基于它。先完整阅读 .agents/skills/intranet-message-triage/SKILL.md 并严格按该 skill 执行一轮：只处理 state/notify-state.json 游标之后的 logs/intranet-diff/ 与 logs/intranet-error/ 新增产物；按 skill 规则判定重要性；有重要内容则按 skill 模板聚合成一条 markdown，通过 wecom-cli tool 发送（先 message aibot sessions list，按群名「未命名企业」精确匹配 group 会话取当次 chat_id，再 message aibot send）；发送成功才推进 state/notify-state.json 游标；发送失败写 logs/intranet-notify/ 当日 .log 并保留游标；无重要内容则不发送任何消息、直接结束。不要改动项目根目录以外的任何文件。
+'@
+    & openclaw cron add `
+        --name $notifyJobName `
+        --agent main `
+        --every $notifyEvery `
+        --message $notifyMessage `
+        --declaration-key $notifyJobName `
+        --no-deliver `
+        --json | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "OpenClaw cron 注册失败（$notifyJobName），退出码：$LASTEXITCODE"
+    }
+    Write-Host "已注册 OpenClaw cron：$notifyJobName（每 $notifyEvery 触发 agent 执行 triage+企微推送）。"
+}
 Write-Host "查看：.\scripts\register-openclaw-intranet-cron.ps1 -Action List"
 Write-Host "删除：先查看任务 ID，再运行 -Action Remove -JobId <id>"

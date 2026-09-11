@@ -38,6 +38,15 @@ claw 通过 cron 和 py 脚本监视 web -> 监测到 web 有消息生成 .log �
 - flow2：
 py 脚本监视 web 的同时记录错误 -> py 脚本写下 .log 文件，记录异常，生成原始错误日志 -> claw 读取错误日志 -> 通过 claw 的 skill 来判断这个错误对影响业务的重要性 -> 发现重要则发送到企业微信
 
-目前公司需要监视的内网 web 的 url 为[Directory listing for /](http://172.16.30.20:8011/)（本机可以直接访问）；企业微信发到李非凡。
+目前公司需要监视的内网 web 的 url 为[Directory listing for /](http://172.16.30.20:8011/)（本机可以直接访问）；
+
+## 发送渠道现状（2026-09-11 起）
+
+flow1/flow2 的"发送到企业微信"已落地：OpenClaw 官方插件 `@wecom/wecom-openclaw-plugin` 接入智能机器人 **FF**（长连接模式，不需要域名备案和可信IP），推送到测试企业「未命名企业」的全员群（李非凡在群内）。
+
+- 扫描任务 `intranet-file-monitor-once`（每分钟写日志）+ 通知任务 `intranet-message-notify`（每分钟 agent triage+推送），均由 `scripts/register-openclaw-intranet-cron.ps1` 注册。
+- 重要性判定规则见 `.agents/skills/intranet-message-triage/SKILL.md`；推送游标在 `state/notify-state.json`；推送失败记录在 `logs/intranet-notify/`。
+- Bot ID/Secret 只存全局 `~/.openclaw/openclaw.json`，仓库内禁止明文密钥；群 chatId 等脱敏配置在 `config/wecom-aibot.json`。
+- 前提：目标群里须有人 @FF 发过消息机器人才能主动推送；失效时重新 @FF 并核对 chatId。
 
 约束：本机生成的任何文件都要放在 C:\Users\ELadmin\Desktop\program\kimiclaw-monitor-messages 这里，全局配置除外。

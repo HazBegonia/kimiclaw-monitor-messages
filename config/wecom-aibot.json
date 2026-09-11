@@ -1,0 +1,15 @@
+{
+  "channel": "wecom",
+  "botName": "FF",
+  "targetGroup": {
+    "chatName": "未命名企业",
+    "chatId": "wrrwurVgAAyBVtUPePetRmCRD0aMJPLQ",
+    "chatType": "group",
+    "activatedAt": "2026-09-11T10:27:37+08:00"
+  },
+  "notes": [
+    "Bot ID/Secret 仅存于全局 ~/.openclaw/openclaw.json（channels.wecom.*），本文件不放任何密钥。",
+    "chatId 是参考值：发送时仍须按 intranet-message-triage skill 先调 sessions list 按群名匹配取当次的 chat_id。",
+    "若机器人被移出群后重新加入导致推送失败，需在群内重新 @FF 发一条消息激活会话，并核对本文件 chatId。"
+  ]
+}

@@ -2,5 +2,7 @@
   "jobName": "intranet-file-monitor-once",
   "every": "1m",
   "scanIntervalSeconds": 5,
-  "timeoutSeconds": 10
+  "timeoutSeconds": 10,
+  "notifyJobName": "intranet-message-notify",
+  "notifyEvery": "1m"
 }

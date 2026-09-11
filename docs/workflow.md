@@ -1,8 +1,8 @@
 # 单一 OpenClaw 入口（内网 Web 最小尝试）
 
-只需启动一个 OpenClaw gateway。由 OpenClaw cron 按配置文件中的间隔调用 Python **单次扫描**，不再另行启动 Windows 任务计划或 Python 常驻进程：
+只需启动一个 OpenClaw gateway。由 OpenClaw cron 按配置文件中的间隔调用 Python **单次扫描**，不再另行启动 Windows 任务计划或 Python 常驻进程；扫描产物由另一个 cron agent 任务做重要性判定并推送企业微信（见下文「通知链路」）。
 
-调度配置在 `config/openclaw-intranet-cron.json`，修改 `every` 即可调整 OpenClaw 调用频率；`scanIntervalSeconds` 和 `timeoutSeconds` 控制 Python 参数。
+调度配置在 `config/openclaw-intranet-cron.json`，修改 `every` 即可调整 OpenClaw 调用频率；`scanIntervalSeconds` 和 `timeoutSeconds` 控制 Python 参数；`notifyJobName` 和 `notifyEvery` 控制 triage+推送任务（置空则不注册该任务）。
 
 项目内 PowerShell 脚本已统一保存为 **UTF-8 with BOM**，兼容 Windows PowerShell 5.1。若用编辑器重新保存脚本，请保持该编码格式。
 
@@ -30,4 +30,15 @@ Python 发现扫描或本地持久化错误时，将原始技术错误写入 `lo
 .\scripts\register-openclaw-intranet-cron.ps1 -Action Remove -JobId <任务ID>
 ```
 
-OpenClaw cron 的调度粒度适合分钟级（例如 `-Every 1m`、`-Every 5m`），不适合 5 秒级实时监控。若必须约 5 秒轮询，请改用 `python -m src.intranet_filename_monitor --interval 5` 常驻模式（并接受需要单独守护该进程）。当前最小尝试只写本地日志，未接入企业微信或钉钉。
+OpenClaw cron 的调度粒度适合分钟级（例如 `-Every 1m`、`-Every 5m`），不适合 5 秒级实时监控。若必须约 5 秒轮询，请改用 `python -m src.intranet_filename_monitor --interval 5` 常驻模式（并接受需要单独守护该进程）。
+
+## 通知链路（flow1/flow2 末端）
+
+扫描只写本地日志；通知由 cron agent 任务 `intranet-message-notify`（与扫描任务同脚本注册）完成：每轮阅读 `.agents/skills/intranet-message-triage/SKILL.md`，处理 `state/notify-state.json` 游标之后的新产物，重要消息聚合为一条 markdown，经企业微信智能机器人 FF（`@wecom/wecom-openclaw-plugin`，长连接）推送到「未命名企业」全员群。
+
+前提与排障：
+
+- 机器人凭证在全局 `~/.openclaw/openclaw.json`（`channels.wecom.*`），本仓库不落密钥；目标群信息在 `config/wecom-aibot.json`。
+- 企微限制：目标会话须先有人 @FF 发过消息，机器人才能主动推送。若群会话失效（如机器人被移出群再加回），重新 @FF 发一条消息并核对 `config/wecom-aibot.json` 中的 chatId。
+- 推送失败不丢消息：失败写入 `logs/intranet-notify/YYYY-MM-DD.log`，游标不推进，下轮重发。
+- 重要性判定规则在 `intranet-message-triage` skill 中，调整规则即调整推送行为。

@@ -42,12 +42,12 @@ python -m src.intranet_filename_monitor --interval 5
 python -m src.intranet_filename_monitor --event-url http://127.0.0.1:3000/events --event-token SECRET
 ```
 
-投递失败的事件保存在 `state/openclaw-pending/`。请求失败或异常页面保留旧状态，不误判删除。服务无 SSE/WebSocket/Webhook/ETag/Last-Modified，只能轮询准实时；页面约 1.33 MB，5 秒约 22.9 GiB/天，1 秒仅适合短测。本 change 不下载 CSV 正文，也不处理企业微信、钉钉。
+投递失败的事件保存在 `state/openclaw-pending/`。请求失败或异常页面保留旧状态，不误判删除。服务无 SSE/WebSocket/Webhook/ETag/Last-Modified，只能轮询准实时；页面约 1.33 MB，5 秒约 22.9 GiB/天，1 秒仅适合短测。本 change 不下载 CSV 正文；钉钉未接入。企业微信通知已由 `wecom-aibot-notify` 实现（见 `docs/workflow.md`「通知链路」）。
 
 ## 原始错误日志
 
 Python 监控器遇到请求、页面校验、配置、状态或本地文件写入错误时，会将技术事实写入 `logs/intranet-error/YYYY-MM-DD.log`。文件采用 JSONL，每行一条记录，包含 `eventId`、`detectedAt`、`monitorId`、`mode`、`phase`、`errorType`、`message`、相关 `path`/脱敏 `url`、`statePreserved` 和 `retryable` 等字段。
 
-错误日志只描述发生了什么，不判断业务重要性，不生成业务分析结论，也不发送通知。后续 Claw skill 可以按 `eventId` 和时间读取这些原始记录，再实现独立的业务判断。
+错误日志只描述发生了什么，不判断业务重要性，不生成业务分析结论。重要性判定与企微推送由 `intranet-message-notify` cron agent 任务按 `.agents/skills/intranet-message-triage/SKILL.md` 完成（读取游标后的新记录、判定、聚合推送、推进游标）。
 
 错误记录不会包含认证 Token、完整网页响应或 CSV 正文。默认保留 30 天、总大小上限 100 MB；清理失败不会覆盖原始错误处理结果。错误日志目录不可写时，程序会将脱敏摘要回退输出到 stderr。

@@ -6,9 +6,9 @@
 
 ## Requirements
 
-### Requirement: Configurable version selection
+### Requirement: Manually maintained version selection
 
-系统 MUST 从工作区配置中读取版本选择列表；每个选择项 MUST 包含稳定的版本 ID 和用于匹配目录文件名的匹配文本。配置可以包含零个、一个或多个版本。
+系统 MUST 从工作区配置中读取版本选择列表；每个选择项 MUST 包含稳定的版本 ID 和用于匹配目录文件名的匹配文本。配置可以包含零个、一个或多个版本。过渡期该配置文件（`config/intranet-versions.json`）MUST 由人工直接维护，作为版本选择的唯一生效来源；系统 MUST NOT 存在对该文件的自动生成或覆盖机制。
 
 #### Scenario: Select one version
 
@@ -22,22 +22,32 @@
 
 #### Scenario: Empty selection
 
-- **WHEN** 配置中的版本选择列表为空
+- **WHEN** 版本选择列表为空
 - **THEN** 系统仍执行通用全量文件变化监控，但不生成版本快照日志
+
+#### Scenario: Manual edit takes effect
+
+- **WHEN** 人直接编辑 `config/intranet-versions.json` 修改版本清单
+- **THEN** 下一次扫描即按新清单生成版本快照，没有任何流程会覆盖该修改
 
 ### Requirement: Full snapshot for selected versions
 
-每次成功完成网页抓取和页面校验后，系统 MUST 为每个选中的版本生成一份全量快照日志；日志 MUST 包含版本 ID、扫描时间、匹配规则、匹配文件数量和该版本当前全部匹配文件名，即使本轮相较上轮没有变化。
+每次成功完成网页抓取和页面校验后，系统 MUST 为每个选中的版本计算其当前匹配文件集合并与上次记录比较：仅当集合发生变化（含首次基线）时 MUST 生成一条版本快照日志；日志 MUST 包含版本 ID、扫描时间、匹配规则、增减计数，以及**改动前的完整文件清单**与**改动后的完整文件清单**；集合无变化时 MUST 不生成该版本的任何新日志。
 
 #### Scenario: Successful unchanged scan
 
 - **WHEN** 网页成功返回且选中版本的文件集合与上次相同
-- **THEN** 系统仍为该版本生成新的全量快照日志
+- **THEN** 系统不生成该版本的快照日志，也不改变该版本已记录的文件集合
 
 #### Scenario: Successful changed scan
 
 - **WHEN** 网页成功返回且选中版本的文件集合发生新增或删除
-- **THEN** 系统生成包含变化后完整文件集合的版本快照日志，并继续生成现有通用变化日志
+- **THEN** 系统生成一条版本快照日志，包含改动前的完整文件清单、改动后的完整文件清单及增减计数，并继续生成现有通用变化日志
+
+#### Scenario: Initial baseline
+
+- **WHEN** 版本首次被纳入监控，或状态中尚无该版本的文件集合记录
+- **THEN** 系统生成一条基线快照日志，改动前清单为空、改动后清单为当前全部匹配文件
 
 ### Requirement: Preserve generic change logs
 

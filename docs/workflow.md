@@ -1,5 +1,18 @@
 # 单一 OpenClaw 入口（内网 Web 最小尝试）
 
+> 注：本文档描述 OpenClaw cron 驱动架构。2026-09-14 起扫描改由 Windows 常驻守护任务驱动、事件唤醒 triage；**2026-09-18 起 OpenClaw 整体退役**（change: retire-openclaw-py-notifier，gateway 已停、cron 已删），通知链路改为 py 通知器。现行架构见 `AGENTS.md`「当前架构：py 通知器」节与下方「通知链路（现行）」，下文早期描述仅作历史记录。
+
+## 通知链路（现行：py 通知器，2026-09-18 起）
+
+扫描只写本地日志；通知由独立的 py 通知器完成：
+
+- **任务**：Windows 计划任务 `KimiclawIntranetNotifier`（登录触发 + 1 分钟守护触发器）运行 `scripts/run-intranet-notifier.ps1` → `python -m src.intranet_notifier --interval 5` 常驻；单实例由 `state/notifier-resident.lock` 心跳锁保证；崩溃由 runner/守护触发器自动恢复。注册脚本同采集任务（`register-windows-scheduler.ps1 -TaskName ... -EntryScript ...`）。
+- **规则**：`config/triage-rules.json` 每轮热读；新增/删除文件默认推；监控器自身错误（PageValidationError、read_config/write_state/write_snapshot_log/read_rules）推；孤立可重试抖动抑制、同 monitorId+phase 30 分钟窗口 ≥3 次升级推送；规则文件损坏 → last-good + 群内「规则文件损坏」告警。
+- **凭证**：FF Bot ID/Secret 仅存 gitignored 的 `state/secrets/wecom-bot.json`（复制自 `~/.openclaw/openclaw.json`）；目标群 chatid 在 `config/notifier.json`。
+- **游标与留痕**：`state/notify-state.json` 发送成功才推进；失败写 `logs/intranet-notify/YYYY-MM-DD.log`（stage: wecom-send）且不推进游标、下轮重发。
+- **调试**：`python -m src.intranet_notifier --once --dry-run`（只打印不发送不推进）、`--once`（单轮，失败退出码非 0）；`scripts/poc_wecom_ws.py` 单文件 PoC（实测 20480 字节上限）。
+- **回滚**：见 `AGENTS.md`「回滚（分钟级）」——先停通知器任务，再恢复 `config/triage-message.txt` 备份并启动 gateway，游标两界通用、无重复推送。
+
 只需启动一个 OpenClaw gateway。由 OpenClaw cron 按配置文件中的间隔调用 Python **单次扫描**，不再另行启动 Windows 任务计划或 Python 常驻进程；扫描产物由另一个 cron agent 任务做重要性判定并推送企业微信（见下文「通知链路」）。
 
 调度配置在 `config/openclaw-intranet-cron.json`，修改 `every` 即可调整 OpenClaw 调用频率；`scanIntervalSeconds` 和 `timeoutSeconds` 控制 Python 参数；`notifyJobName` 和 `notifyEvery` 控制 triage+推送任务（置空则不注册该任务）。
@@ -32,9 +45,9 @@ Python 发现扫描或本地持久化错误时，将原始技术错误写入 `lo
 
 OpenClaw cron 的调度粒度适合分钟级（例如 `-Every 1m`、`-Every 5m`），不适合 5 秒级实时监控。若必须约 5 秒轮询，请改用 `python -m src.intranet_filename_monitor --interval 5` 常驻模式（并接受需要单独守护该进程）。
 
-## 通知链路（flow1/flow2 末端）
+## 通知链路（flow1/flow2 末端 · 历史，2026-09-18 起被上方 py 通知器取代）
 
-扫描只写本地日志；通知由 cron agent 任务 `intranet-message-notify`（与扫描任务同脚本注册）完成：每轮阅读 `.agents/skills/intranet-message-triage/SKILL.md`，处理 `state/notify-state.json` 游标之后的新产物，重要消息聚合为一条 markdown，经企业微信智能机器人 FF（`@wecom/wecom-openclaw-plugin`，长连接）推送到「未命名企业」全员群。
+扫描只写本地日志；通知由 cron agent 任务 `intranet-message-notify`（与扫描任务同脚本注册）完成：每轮阅读 `skills/intranet-message-triage/SKILL.md`，处理 `state/notify-state.json` 游标之后的新产物，重要消息聚合为一条 markdown，经企业微信智能机器人 FF（`@wecom/wecom-openclaw-plugin`，长连接）推送到「未命名企业」全员群。
 
 前提与排障：
 

@@ -1,6 +1,6 @@
 """Resident polling monitor for configurable fields in an intranet HTML page."""
 from __future__ import annotations
-import argparse, hashlib, json, re, sys, time, uuid
+import argparse, hashlib, json, os, re, shutil, subprocess, sys, time, uuid
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -13,6 +13,9 @@ DEFAULT_URL="http://172.16.30.20:8011/"; DEFAULT_INTERVAL=5.0; DEFAULT_TIMEOUT=1
 DEFAULT_ERROR_LOG_DIR = Path("logs/intranet-error")
 ERROR_LOG_RETENTION_DAYS = 30
 ERROR_LOG_MAX_BYTES = 100 * 1024 * 1024
+DEFAULT_TRIAGE_MESSAGE_FILE = Path("config/triage-message.txt")
+WAKE_GRACE_SECONDS = 15.0
+RESIDENT_LOCK_PATH = Path("state/monitor-resident.lock")
 
 class PageValidationError(RuntimeError):
     """Raised when a fetched page is not a valid directory listing."""
@@ -169,9 +172,10 @@ def record_error(error_log_dir: Path, *, monitor_id: str, mode: str, phase: str,
         print(f"scan error ({phase}): {_redact(error)}; error log unavailable: {_redact(log_error)}", file=sys.stderr, flush=True)
         return None
 
-def _write_state(path: Path, snapshot: dict[str,object], checked_at: datetime):
+def _write_state(path: Path, snapshot: dict[str,object], checked_at: datetime, version_files: dict[str, list[str]] | None = None):
     d={"checkedAt":checked_at.isoformat(),"snapshot":snapshot,"fingerprint":fingerprint(snapshot)}
     if "root_files" in snapshot:d["files"]=snapshot["root_files"]
+    if version_files:d["versionFiles"]={k:sorted(v) for k,v in version_files.items()}
     _atomic_write(path,json.dumps(d,ensure_ascii=False,indent=2)+"\n")
 
 def _next_log_path(log_dir: Path, dt: datetime)->Path:
@@ -183,7 +187,7 @@ def load_selected_versions(path: Path | None) -> list[dict[str, str]]:
     """Load and validate configured version selectors from JSON."""
     if path is None or not path.exists():
         return []
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     items = data.get("selectedVersions", []) if isinstance(data, dict) else data
     if not isinstance(items, list):
         raise ValueError("selectedVersions must be an array")
@@ -203,11 +207,103 @@ def filter_version_files(files: Iterable[str], selected_versions: Iterable[dict[
     files = list(files)
     return {v["id"]: sorted(name for name in files if v["match"] in name) for v in selected_versions}
 
-def write_snapshot_log(log_dir: Path, version: dict[str, str], files: Iterable[str], detected_at: datetime | None = None) -> Path:
+def load_monitors_config(path: Path) -> list[dict[str, object]]:
+    """Load and validate monitor targets from JSON."""
+    if not path.exists():
+        raise ValueError(f"monitors config not found: {path}")
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    items = data.get("targets") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise ValueError("monitors config requires a targets array")
+    result = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("each target must be an object")
+        target_id, url = str(item.get("id", "")).strip(), str(item.get("url", "")).strip()
+        if not target_id or not url:
+            raise ValueError("each target requires id and url")
+        if target_id in {".", ".."} or Path(target_id).name != target_id or target_id in seen:
+            raise ValueError("target ids must be unique single path components")
+        seen.add(target_id)
+        profile = item.get("profile")
+        if profile is not None and not isinstance(profile, dict):
+            raise ValueError("target profile must be an object")
+        result.append({"id": target_id, "url": url, "profile": profile})
+    return result
+
+def _write_resident_lock(path: Path, owner: str) -> None:
+    data = {"pid": os.getpid(), "heartbeat": time.time(), "owner": owner}
+    _atomic_write(path, json.dumps(data, separators=(",", ":")))
+
+def _read_resident_lock(path: Path) -> dict[str, object] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+def acquire_resident_lock(path: Path, interval: float) -> str | None:
+    """Atomically acquire the resident lock, replacing only stale lock files."""
+    owner = uuid.uuid4().hex
+    while True:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            existing = _read_resident_lock(path)
+            heartbeat = existing.get("heartbeat") if existing else None
+            if isinstance(heartbeat, (int, float)) and time.time() - heartbeat <= interval * 2:
+                return None
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        try:
+            data = {"pid": os.getpid(), "heartbeat": time.time(), "owner": owner}
+            os.write(fd, json.dumps(data, separators=(",", ":")).encode("utf-8"))
+        finally:
+            os.close(fd)
+        return owner
+
+def refresh_resident_lock(path: Path, owner: str) -> bool:
+    data = _read_resident_lock(path)
+    if not data or data.get("owner") != owner:
+        return False
+    _write_resident_lock(path, owner)
+    return True
+
+def release_resident_lock(path: Path, owner: str) -> None:
+    data = _read_resident_lock(path)
+    if data and data.get("owner") == owner:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+def write_version_change_log(log_dir: Path, version: dict[str, str], before: Iterable[str], after: Iterable[str], detected_at: datetime | None = None) -> Path:
+    """Write ONE audit log when a version's file set changes, containing the FULL
+    before list and the FULL after list plus change counts. Only change events
+    produce files: an unchanged scan writes nothing for this version."""
     dt = detected_at or datetime.now(TIME_ZONE)
-    names = sorted(files)
-    lines = [f"monitorId: intranet-focus-{version['id']}", f"detectedAt: {dt.isoformat()}", f"versionId: {version['id']}", f"match: {version['match']}", f"count: {len(names)}", "", "files:"]
-    lines.extend(f"- {name}" for name in names)
+    before_names, after_names = sorted(before), sorted(after)
+    added, removed = diff_filenames(before_names, after_names)["added"], diff_filenames(before_names, after_names)["removed"]
+    lines = [
+        f"monitorId: intranet-focus-{version['id']}",
+        f"detectedAt: {dt.isoformat()}",
+        f"versionId: {version['id']}",
+        f"match: {version['match']}",
+        f"changed: true",
+        f"addedCount: {len(added)}",
+        f"removedCount: {len(removed)}",
+        f"beforeCount: {len(before_names)}",
+        f"afterCount: {len(after_names)}",
+        "", "before:",
+    ]
+    lines.extend(f"- {name}" for name in before_names)
+    lines += ["", "after:"]
+    lines.extend(f"- {name}" for name in after_names)
     path = _next_log_path(log_dir / version["id"], dt)
     _atomic_write(path, "\n".join(lines) + "\n")
     return path
@@ -262,6 +358,78 @@ def deliver_pending(outbox: Path, event_url: str, timeout: float, token: str|Non
             continue
     return delivered
 
+def load_triage_message(path: Path) -> str | None:
+    """Read the fixed triage instruction; None disables agent wake-up."""
+    try:
+        if not path.exists(): return None
+        text = path.read_text(encoding="utf-8-sig").strip()
+        return text or None
+    except Exception:
+        return None
+
+def spawn_triage_agent(message: str, grace: float = WAKE_GRACE_SECONDS) -> bool:
+    """Spawn a one-shot triage agent; True when launched and not failed within grace."""
+    kwargs: dict[str, object] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        cli = shutil.which("openclaw") or "openclaw.cmd"
+        proc = subprocess.Popen([cli, "agent", "--local", "--agent", "main", "-m", message], **kwargs)
+    except Exception as e:
+        print(f"triage wake spawn failed: {_redact(e)}", file=sys.stderr, flush=True)
+        return False
+    try:
+        rc = proc.wait(timeout=grace)
+        if rc != 0:
+            print(f"triage wake agent exited with code {rc}", file=sys.stderr, flush=True)
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        print("triage wake delivered (agent still running)", flush=True)
+        return True
+    except Exception as e:
+        print(f"triage wake wait failed: {_redact(e)}", file=sys.stderr, flush=True)
+        return False
+
+def clear_outbox(outbox: Path) -> int:
+    """Remove all queued wake events; one successful wake covers the whole backlog."""
+    removed = 0
+    if not outbox.exists(): return 0
+    for path in outbox.glob("*.json"):
+        try: path.unlink(); removed += 1
+        except Exception: continue
+    return removed
+
+def deliver_pending_wake(outbox: Path, message: str, grace: float = WAKE_GRACE_SECONDS) -> int:
+    """Retry wake-up once when events are queued; success clears the whole outbox."""
+    try:
+        if not outbox.exists() or not any(outbox.glob("*.json")): return 0
+        if not spawn_triage_agent(message, grace): return 0
+        return clear_outbox(outbox)
+    except Exception:
+        return 0
+
+def wake_triage(marks: list[str], outbox: Path, message: str, grace: float = WAKE_GRACE_SECONDS) -> bool:
+    """Spawn triage once for this round's marks; on failure queue a deduped wake event."""
+    if not marks: return False
+    marks = sorted(marks)
+    payload = {
+        "event_id": hashlib.sha256("|".join(marks).encode()).hexdigest(),
+        "monitor_id": ",".join(sorted({m.split(":")[1] for m in marks})),
+        "log_path": next((m.split(":", 2)[2] for m in marks if m.startswith("diff:")), ""),
+        "detected_at": datetime.now(TIME_ZONE).isoformat(),
+    }
+    try:
+        if spawn_triage_agent(message, grace):
+            clear_outbox(outbox)
+            return True
+        _queue_event(outbox, payload)
+    except Exception:
+        pass
+    return False
+
 def run_once(url,state_path,log_dir,timeout,*,event_url=None,outbox=None,event_token=None,monitor_id="intranet-root",min_links=0,profile=None,confirm_polls=1,selected_versions=None,focus_log_dir=Path("logs/intranet-focus"),error_log_dir=DEFAULT_ERROR_LOG_DIR,mode="once"):
     dt=datetime.now(TIME_ZONE); phase = "fetch_page"; state_preserved = state_path.exists(); operation_path = None; written_paths = []
     try:
@@ -290,20 +458,24 @@ def run_once(url,state_path,log_dir,timeout,*,event_url=None,outbox=None,event_t
             raise
         state_preserved = prev is not None
         version_logs = []
+        version_files = dict(prev.get("versionFiles", {})) if prev else {}
         if selected_versions:
             phase = "write_snapshot_log"
-            for version, names in filter_version_files(files, selected_versions).items():
+            for version, after_names in filter_version_files(files, selected_versions).items():
                 spec = next(v for v in selected_versions if v["id"] == version)
-                operation_path = focus_log_dir / version
-                snapshot_path = write_snapshot_log(focus_log_dir, spec, names, dt)
-                written_paths.append(str(snapshot_path)); version_logs.append(str(snapshot_path))
+                before_names = version_files.get(version, [])
+                if sorted(before_names) != sorted(after_names):
+                    operation_path = focus_log_dir / version
+                    snapshot_path = write_version_change_log(focus_log_dir, spec, before_names, after_names, dt)
+                    written_paths.append(str(snapshot_path)); version_logs.append(str(snapshot_path))
+                    version_files[version] = after_names
         if prev is None:
-            phase = "write_state"; operation_path = state_path; _write_state(state_path,snap,dt); written_paths.append(str(state_path))
+            phase = "write_state"; operation_path = state_path; _write_state(state_path,snap,dt,version_files); written_paths.append(str(state_path))
             return {"baseline":True,"added":[],"removed":[],"log":None,"versionLogs":version_logs,"count":len(files),"bytes":nbytes,"duration":duration}
         phase = "write_diff_log"; operation_path = log_dir; diff=diff_snapshots(prev.get("snapshot",{}),snap); log=write_diff_log(log_dir,diff,dt,monitor_id=monitor_id,previous_fingerprint=prev.get("fingerprint","") ,current_fingerprint=fingerprint(snap));
         if log:
             written_paths.append(str(log))
-        phase = "write_state"; operation_path = state_path; _write_state(state_path,snap,dt)
+        phase = "write_state"; operation_path = state_path; _write_state(state_path,snap,dt,version_files)
         written_paths.append(str(state_path))
         if log and event_url:
             event_key=f"{monitor_id}|{prev.get('fingerprint','')}|{fingerprint(snap)}|{Path(log).name}"
@@ -318,24 +490,58 @@ def run_once(url,state_path,log_dir,timeout,*,event_url=None,outbox=None,event_t
         raise
 
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--url",default=DEFAULT_URL); p.add_argument("--interval",type=float,default=DEFAULT_INTERVAL); p.add_argument("--timeout",type=float,default=DEFAULT_TIMEOUT); p.add_argument("--confirm-polls",type=int,default=1); p.add_argument("--state",type=Path,default=Path("state/intranet-files.json")); p.add_argument("--log-dir",type=Path,default=Path("logs/intranet-diff")); p.add_argument("--focus-log-dir",type=Path,default=Path("logs/intranet-focus")); p.add_argument("--error-log-dir",type=Path,default=DEFAULT_ERROR_LOG_DIR); p.add_argument("--versions-config",type=Path,default=Path("config/intranet-versions.json")); p.add_argument("--profile",type=Path,help="JSON field profile"); p.add_argument("--event-url"); p.add_argument("--event-token"); p.add_argument("--outbox",type=Path,default=Path("state/openclaw-pending")); p.add_argument("--once",action="store_true"); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--url"); p.add_argument("--interval",type=float,default=DEFAULT_INTERVAL); p.add_argument("--timeout",type=float,default=DEFAULT_TIMEOUT); p.add_argument("--confirm-polls",type=int,default=1); p.add_argument("--state",type=Path,default=None); p.add_argument("--log-dir",type=Path,default=Path("logs/intranet-diff")); p.add_argument("--focus-log-dir",type=Path,default=Path("logs/intranet-focus")); p.add_argument("--error-log-dir",type=Path,default=DEFAULT_ERROR_LOG_DIR); p.add_argument("--versions-config",type=Path,default=Path("config/intranet-versions.json")); p.add_argument("--monitors-config",type=Path,default=Path("config/monitors.json")); p.add_argument("--profile",type=Path,help="JSON field profile"); p.add_argument("--event-url"); p.add_argument("--event-token"); p.add_argument("--outbox",type=Path,default=Path("state/openclaw-pending")); p.add_argument("--triage-message-file",type=Path,default=DEFAULT_TRIAGE_MESSAGE_FILE); p.add_argument("--once",action="store_true"); a=p.parse_args(argv)
     if a.interval<=0 or a.timeout<=0 or a.confirm_polls<=0:print("--interval, --timeout and --confirm-polls must be positive",file=sys.stderr); return 2
-    exit_code=0
-    while True:
-        try:
-            if a.event_url: deliver_pending(a.outbox,a.event_url,a.timeout,a.event_token)
+    exit_code=0; mode="once" if a.once else "resident"
+    lock_owner = None if a.once else acquire_resident_lock(RESIDENT_LOCK_PATH, a.interval)
+    if not a.once and lock_owner is None:
+        return 0
+    triage_message=load_triage_message(a.triage_message_file)
+    triage_warning_pending = triage_message is None
+    try:
+        while True:
+            marks=[]
             try:
-                profile=json.loads(a.profile.read_text(encoding="utf-8")) if a.profile else None
-                versions=load_selected_versions(a.versions_config)
+                if a.event_url: deliver_pending(a.outbox,a.event_url,a.timeout,a.event_token)
+                if triage_message: deliver_pending_wake(a.outbox,triage_message)
+                config_path=None
+                try:
+                    if a.url:
+                        targets=[{"id":"intranet-root","url":a.url,"profile":None}]
+                    else:
+                        config_path=a.monitors_config; targets=load_monitors_config(a.monitors_config)
+                    if a.once and not targets:
+                        raise ValueError("monitors config requires a non-empty targets array")
+                    if a.profile: config_path=a.profile; profile=json.loads(a.profile.read_text(encoding="utf-8-sig"))
+                    else: profile=None
+                    if a.state and len(targets)>1: config_path=a.state; raise ValueError("--state only supports a single target")
+                    config_path=a.versions_config; versions=load_selected_versions(a.versions_config)
+                except Exception as e:
+                    record_error(a.error_log_dir, monitor_id="intranet-root", mode=mode, phase="read_config", error=e, path=config_path, state_preserved=False)
+                    marks.append("error:read_config")
+                    raise
+                if triage_warning_pending and targets:
+                    print(f"triage message file unavailable: {a.triage_message_file}; agent wake disabled",file=sys.stderr,flush=True)
+                    triage_warning_pending = False
+                for target in targets:
+                    state_path=a.state or Path("state")/f"intranet-files-{target['id']}.json"
+                    try:
+                        r=run_once(target["url"],state_path,a.log_dir,a.timeout,event_url=a.event_url,outbox=a.outbox,event_token=a.event_token,monitor_id=target["id"],profile=target.get("profile") or profile,confirm_polls=a.confirm_polls,selected_versions=versions,focus_log_dir=a.focus_log_dir,error_log_dir=a.error_log_dir,mode=mode)
+                        if r["baseline"]:print(f"baseline saved [{target['id']}]: {r['count']} files",flush=True)
+                        elif r["log"]:print(f"diff [{target['id']}]: {r['log']}",flush=True); marks.append(f"diff:{target['id']}:{Path(r['log']).name}")
+                    except Exception as e:
+                        print(f"scan failed [{target['id']}]: {e}",file=sys.stderr,flush=True)
+                        marks.append(f"error:{target['id']}")
+                        exit_code=1
             except Exception as e:
-                record_error(a.error_log_dir, monitor_id="intranet-root", mode="once" if a.once else "resident", phase="read_config", error=e, path=a.profile or a.versions_config, state_preserved=a.state.exists())
-                raise
-            r=run_once(a.url,a.state,a.log_dir,a.timeout,event_url=a.event_url,outbox=a.outbox,event_token=a.event_token,profile=profile,confirm_polls=a.confirm_polls,selected_versions=versions,focus_log_dir=a.focus_log_dir,error_log_dir=a.error_log_dir,mode="once" if a.once else "resident")
-            if r["baseline"]:print(f"baseline saved: {r['count']} files",flush=True)
-            elif r["log"]:print(f"diff: {r['log']}",flush=True)
-        except Exception as e:
-            print(f"scan failed: {e}",file=sys.stderr,flush=True)
-            exit_code=1
-        if a.once:return exit_code
-        time.sleep(a.interval)
+                print(f"scan failed: {e}",file=sys.stderr,flush=True)
+                exit_code=1
+            if triage_message and marks: wake_triage(marks,a.outbox,triage_message)
+            if a.once:return exit_code
+            if not refresh_resident_lock(RESIDENT_LOCK_PATH, lock_owner):
+                return 1
+            time.sleep(a.interval)
+    finally:
+        if lock_owner:
+            release_resident_lock(RESIDENT_LOCK_PATH, lock_owner)
 if __name__=="__main__":raise SystemExit(main())

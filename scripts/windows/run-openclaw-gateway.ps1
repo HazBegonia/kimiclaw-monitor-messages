@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$workspace = Split-Path -Parent $PSScriptRoot
+$workspace = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $logDir = Join-Path $workspace 'logs\openclaw-gateway'
 New-Item -ItemType Directory -Force $logDir | Out-Null
 $logFile = Join-Path $logDir ((Get-Date).ToString('yyyy-MM-dd') + '.log')

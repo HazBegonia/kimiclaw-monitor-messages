@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$workspace = Split-Path -Parent $PSScriptRoot
+$workspace = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $argsList = @('-m', 'src.intranet_notifier', '--interval', $Interval)
 $effectiveRestartDelaySeconds = [Math]::Max($RestartDelaySeconds, [int][Math]::Floor($Interval * 2) + 1)
 if ($Mode -eq 'Once') { $argsList += '--once' }

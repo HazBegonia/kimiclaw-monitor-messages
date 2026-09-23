@@ -89,7 +89,7 @@ user-invocable: true
 5. 生成 config 与同步常驻守护任务（幂等，内容一致不重写文件）：
    - 「已激活」的 `req-targets` → `config/monitors.json` 的 `targets` 数组原样照抄。
    - 「已激活」的 `req-versions` → `config/intranet-versions.json` 的 `selectedVersions` 数组原样照抄。
-   - 「已激活」的 `req-scan-interval` → 先调用 `scripts/register-windows-scheduler.ps1 -Action Stop`，再调用 `scripts/register-windows-scheduler.ps1 -IntervalSeconds <值>` 重建 Windows 常驻守护任务并用 `-Action Run` 重启扫描进程（值与当前一致时跳过）。调用方式：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File <项目根绝对路径>\scripts\register-windows-scheduler.ps1 <参数>`。
+   - 「已激活」的 `req-scan-interval` → 先调用 `scripts/windows/register-windows-scheduler.ps1 -Action Stop`，再调用 `scripts/windows/register-windows-scheduler.ps1 -IntervalSeconds <值>` 重建 Windows 常驻守护任务并用 `-Action Run` 重启扫描进程（值与当前一致时跳过）。调用方式：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File <项目根绝对路径>\scripts\windows\register-windows-scheduler.ps1 <参数>`。
    - 铁律：config 与常驻守护任务是台账的确定性派生产物，禁止添加、推测、补全任何字段；手工对 config 或计划任务的改动会在本步被覆盖。
    - 写入格式：UTF-8 无 BOM、`\n` 换行（带 BOM 会导致脚本读取失败；脚本已兼容 utf-8-sig，但仍以无 BOM 为准）。
 6. 留痕：往 `logs/intranet-notify/` 当日文件追加一行 JSONL：`{"detectedAt", "stage": "requirement-sync", "action": "none|pending|config-written", "skillHash"}`。

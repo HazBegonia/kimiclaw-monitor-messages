@@ -11,7 +11,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$workspace = Split-Path -Parent $PSScriptRoot
+$workspace = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $argsList = @('-m', 'src.intranet_filename_monitor', '--interval', $Interval, '--timeout', $Timeout)
 $effectiveRestartDelaySeconds = [Math]::Max($RestartDelaySeconds, [int][Math]::Floor($Interval * 2) + 1)
 if ($EventUrl) { $argsList += @('--event-url', $EventUrl) }

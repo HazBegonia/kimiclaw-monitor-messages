@@ -11,8 +11,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$workspace = Split-Path -Parent $PSScriptRoot
-$runner = Join-Path $workspace ("scripts\" + $EntryScript)
+$workspace = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$runner = Join-Path $workspace ("scripts\windows\" + $EntryScript)
 $isMonitorRunner = $EntryScript -like '*monitor*'
 $taskUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
 
@@ -70,6 +70,6 @@ $principal = New-ScheduledTaskPrincipal -UserId $taskUser -LogonType Interactive
 Register-ScheduledTask -TaskName $TaskName -Action $taskAction -Trigger @($trigger, $guardianTrigger) -Settings $settings -Principal $principal -Description "Resident intranet task ($EntryScript); polls every $IntervalSeconds seconds; guardian trigger refires every $GuardianMinutes minutes." -Force | Out-Null
 
 Write-Host "Registered scheduled task: $TaskName (logon trigger + $GuardianMinutes min guardian trigger, resident mode, $IntervalSeconds second interval)"
-Write-Host "Check:  .\scripts\register-windows-scheduler.ps1 -Action List -TaskName $TaskName"
-Write-Host "Manual run: .\scripts\register-windows-scheduler.ps1 -Action Run -TaskName $TaskName"
-Write-Host "Stop:   .\scripts\register-windows-scheduler.ps1 -Action Stop -TaskName $TaskName"
+Write-Host "Check:  .\scripts\windows\register-windows-scheduler.ps1 -Action List -TaskName $TaskName"
+Write-Host "Manual run: .\scripts\windows\register-windows-scheduler.ps1 -Action Run -TaskName $TaskName"
+Write-Host "Stop:   .\scripts\windows\register-windows-scheduler.ps1 -Action Stop -TaskName $TaskName"

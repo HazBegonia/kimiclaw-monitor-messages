@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-*.log
+logs/
 .kimi-code/
 .pytest_cache/
 .tmp/

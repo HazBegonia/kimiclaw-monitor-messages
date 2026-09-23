@@ -5,3 +5,9 @@ __pycache__/
 .pytest_cache/
 .tmp/
 state/
+.venv/
+.gitignore
+
+# 真实配置含 chatid/内网地址等部署私有信息,只入库 *.example.json 模板
+config/*.json
+!config/*.example.json

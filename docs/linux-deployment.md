@@ -11,7 +11,7 @@
 - 插件：wecom-openclaw-plugin@2026.5.7、@openclaw/kimi-provider（CLI 安装）；kimi-claw 0.27.1（npm 没有，从 Windows ~/.openclaw/extensions/kimi-claw 整目录拷贝）
 - linger 已开启（loginctl enable-linger u504），服务随开机启动、注销不掉
 
-## 服务（systemd --user，unit 文件在 scripts/linux/，已拷到 ~/.config/systemd/user/）
+## 服务（systemd --user，unit 由 `scripts/linux/install.sh` 从 `scripts/linux/*.service.template` 渲染到 ~/.config/systemd/user/）
 
 - kimiclaw-monitor.service：python -m src.intranet_filename_monitor --interval 5 --timeout 10，Restart=always
 - kimiclaw-notifier.service：python -m src.intranet_notifier --interval 5，PATH 含 node22/bin（bot_tool 拉活 Claw 要用 openclaw CLI）

@@ -62,7 +62,7 @@ user-invocable: true
 
 ```json monitor-requirements
 {
-  "scanIntervalSeconds": 5,
+  "scanIntervalSeconds": 10,
   "targets": [
     {
       "id": "intranet-root",
@@ -71,8 +71,7 @@ user-invocable: true
     }
   ],
   "versions": [
-    {"id": "103300110002", "match": "103300110002"},
-    {"id": "103300110009", "match": "103300110009"}
+    {"id": "103300110002", "match": "103300110002"}
   ]
 }
 ```

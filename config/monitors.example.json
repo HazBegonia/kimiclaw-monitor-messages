@@ -1,0 +1,14 @@
+{
+  "targets": [
+    {
+      "id": "intranet-root",
+      "url": "http://<内网页面地址>/",
+      "profile": {
+        "root_files": {
+          "type": "link_set",
+          "extension": ".csv"
+        }
+      }
+    }
+  ]
+}

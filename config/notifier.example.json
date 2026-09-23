@@ -1,0 +1,16 @@
+{
+  "chatid": "<目标群 chatid,群里 @机器人 后发一条消息后获取>",
+  "secretsFile": "state/secrets/wecom-bot.json",
+  "pollIntervalSeconds": 10,
+  "diffLogDir": "logs/intranet-diff",
+  "errorLogDir": "logs/intranet-error",
+  "notifyLogDir": "logs/intranet-notify",
+  "stateFile": "state/notify-state.json",
+  "rulesFile": "config/triage-rules.json",
+  "lockFile": "state/notifier-resident.lock",
+  "sourceUrl": "http://<内网页面地址>/",
+  "timeouts": {
+    "connect": 10,
+    "ack": 15
+  }
+}

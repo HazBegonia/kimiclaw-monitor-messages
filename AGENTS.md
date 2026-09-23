@@ -19,7 +19,7 @@
 - 3、kimiclaw 如何获取公司的内网 web、企业微信消息、钉钉消息的信息？
 - 4、如何配置 kimiclaw？完成上述任务可行的 workflow？
 
-目前调研完毕，写在了 docs/KIMICLAW调研报告.md 里面。
+目前调研完毕，写在了 wiki/KIMICLAW调研报告.md 里面。
 
 # 最小尝试
 

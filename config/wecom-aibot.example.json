@@ -1,0 +1,14 @@
+{
+  "channel": "wecom",
+  "botName": "<机器人名>",
+  "targetGroup": {
+    "chatName": "<目标群名>",
+    "chatId": "<目标群 chatid,与 config/notifier.json 一致>",
+    "chatType": "group",
+    "activatedAt": "<首次激活时间 ISO8601>"
+  },
+  "notes": [
+    "Bot ID/Secret 只存 state/secrets/wecom-bot.json(gitignored),本文件不放任何密钥。",
+    "若机器人被移出群后重新加入导致推送失败,需在群内重新 @机器人 发一条消息激活会话,并核对 chatId。"
+  ]
+}

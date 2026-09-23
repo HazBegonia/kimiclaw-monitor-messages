@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/u504/node22/bin/openclaw gateway run
+ExecStart=@OPENCLAW_BIN_DIR@/openclaw gateway run
 Restart=always
 RestartSec=5
-Environment=PATH=/home/u504/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=@OPENCLAW_BIN_DIR@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 [Install]
 WantedBy=default.target

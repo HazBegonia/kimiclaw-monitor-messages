@@ -1,0 +1,16 @@
+[Unit]
+Description=Kimiclaw intranet notifier (resident, pushes via FF bot)
+After=network-online.target kimiclaw-openclaw-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/u504/kimiclaw-monitor-messages
+ExecStart=/home/u504/anaconda3/envs/kimiclaw-monitor-messages/bin/python -m src.intranet_notifier --interval 5
+Restart=always
+RestartSec=11
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/u504/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Kimiclaw OpenClaw gateway (Claw wecom channel, requirement intake)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/u504/node22/bin/openclaw gateway run
+Restart=always
+RestartSec=5
+Environment=PATH=/home/u504/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=default.target

@@ -1,6 +1,6 @@
 """Resident polling monitor for configurable fields in an intranet HTML page."""
 from __future__ import annotations
-import argparse, hashlib, json, os, re, shutil, subprocess, sys, time, uuid
+import argparse, fnmatch, hashlib, json, os, re, shutil, subprocess, sys, time, uuid
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -200,12 +200,19 @@ def load_selected_versions(path: Path | None) -> list[dict[str, str]]:
         if version_id in {".", ".."} or Path(version_id).name != version_id or version_id in seen:
             raise ValueError("version ids must be unique single path components")
         seen.add(version_id)
-        result.append({"id": version_id, "match": match})
+        mode = str(item.get("mode", "substring")).strip()
+        if mode not in ("substring", "fnmatch"):
+            raise ValueError("mode must be 'substring' or 'fnmatch'")
+        result.append({"id": version_id, "match": match, "mode": mode})
     return result
 
 def filter_version_files(files: Iterable[str], selected_versions: Iterable[dict[str, str]]) -> dict[str, list[str]]:
     files = list(files)
-    return {v["id"]: sorted(name for name in files if v["match"] in name) for v in selected_versions}
+    def matches(v: dict[str, str], name: str) -> bool:
+        if v.get("mode", "substring") == "fnmatch":
+            return fnmatch.fnmatch(name, v["match"])
+        return v["match"] in name
+    return {v["id"]: sorted(name for name in files if matches(v, name)) for v in selected_versions}
 
 def load_monitors_config(path: Path) -> list[dict[str, object]]:
     """Load and validate monitor targets from JSON."""

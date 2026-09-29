@@ -13,8 +13,8 @@
 
 ## 服务（systemd --user，unit 由 `scripts/linux/install.sh` 从 `scripts/linux/*.service.template` 渲染到 ~/.config/systemd/user/）
 
-- kimiclaw-monitor.service：python -m src.intranet_filename_monitor --interval 5 --timeout 10，Restart=always
-- kimiclaw-notifier.service：python -m src.intranet_notifier --interval 5，PATH 含 node22/bin（bot_tool 拉活 Claw 要用 openclaw CLI）
+- kimiclaw-monitor.service：python -m src.intranet_filename_monitor --interval 10 --timeout 10，Restart=always
+- kimiclaw-notifier.service：python -m src.intranet_notifier --interval 10，PATH 含 node22/bin（bot_tool 拉活 Claw 要用 openclaw CLI）
 - kimiclaw-openclaw-gateway.service：openclaw gateway run
 
 ## 常用命令（ssh FF 后执行）

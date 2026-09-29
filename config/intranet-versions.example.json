@@ -2,7 +2,8 @@
   "selectedVersions": [
     {
       "id": "103300110002",
-      "match": "103300110002"
+      "match": "103300110002",
+      "mode": "substring"
     }
   ]
 }

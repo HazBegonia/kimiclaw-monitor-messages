@@ -2,12 +2,12 @@
   "push": {
     "diff": {
       "added": true,
-      "removed": true
+      "removed": true,
+      "filenameIncludePatterns": []
     },
     "errors": {
       "errorTypes": ["PageValidationError"],
       "phases": ["read_config", "write_state", "write_snapshot_log", "read_rules"],
-      "consecutiveFetchFailures": 0,
       "repeatEscalation": {
         "windowSeconds": 1800,
         "threshold": 3
@@ -21,8 +21,5 @@
   "unmatched": {
     "diff": "push",
     "error": "silent"
-  },
-  "semantic": {
-    "enabled": false
   }
 }

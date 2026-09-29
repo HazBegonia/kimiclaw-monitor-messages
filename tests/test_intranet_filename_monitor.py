@@ -107,6 +107,31 @@ def test_load_versions_and_filter_multiple_selectors(tmp_path):
     assert filter_version_files(["a_103300110002.csv", "b_103300110003.csv"], versions) == {
         "v1": ["a_103300110002.csv"], "v2": ["b_103300110003.csv"]}
 
+def test_version_mode_defaults_to_substring(tmp_path):
+    config = tmp_path / "versions.json"
+    config.write_text(json.dumps({"selectedVersions": [{"id": "v1", "match": "103300110002"}]}), encoding="utf-8")
+    versions = load_selected_versions(config)
+    assert versions[0]["mode"] == "substring"
+    assert filter_version_files(["a_103300110002.csv"], versions) == {"v1": ["a_103300110002.csv"]}
+
+def test_version_mode_fnmatch_matches_whole_name(tmp_path):
+    config = tmp_path / "versions.json"
+    config.write_text(json.dumps({"selectedVersions": [
+        {"id": "v1", "match": "report-*-103300110002.csv", "mode": "fnmatch"}]}), encoding="utf-8")
+    versions = load_selected_versions(config)
+    files = ["report-2026-103300110002.csv", "x-report-2026-103300110002.csv.bak", "103300110002.csv"]
+    assert filter_version_files(files, versions) == {"v1": ["report-2026-103300110002.csv"]}
+
+def test_version_mode_invalid_rejected(tmp_path):
+    config = tmp_path / "versions.json"
+    config.write_text(json.dumps({"selectedVersions": [
+        {"id": "v1", "match": "x", "mode": "regex"}]}), encoding="utf-8")
+    try:
+        load_selected_versions(config)
+        assert False, "invalid mode must raise"
+    except ValueError:
+        pass
+
 def test_version_snapshot_written_only_on_change_with_before_after(tmp_path, monkeypatch):
     monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: {"a_103300110002.csv"})
     state, logs = tmp_path / "state.json", tmp_path / "logs"

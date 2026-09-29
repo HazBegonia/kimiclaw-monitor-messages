@@ -9,10 +9,11 @@ or schema-invalid, the engine keeps using the last successfully loaded rules and
 emits a `RulesFileCorrupt` self-error fact. The default rules (and the shipped
 config, which lists `read_rules` in push.errors.phases) match that fact, so the
 group receives a "rule file corrupt" alert instead of silent failure. With no
-last-good at all (first ever run), built-in defaults are used — which also
-classify the self-error fact as important.
+last-good at all (first ever run), built-in defaults are used — a minimal
+self-heal set whose only job is to classify the self-error fact as important;
+business defaults live solely in the shipped config file, not in this module.
 
-Precedence for error facts (mirrors skills/intranet-message-triage/SKILL.md):
+Precedence for error facts (mirrors the importance rules):
   1. errorType in push.errors.errorTypes OR phase in push.errors.phases
      -> IMPORTANT (monitor-self errors are never suppressed as jitter)
   2. suppress.isolatedRetryableError and retryable and statePreserved
@@ -20,13 +21,21 @@ Precedence for error facts (mirrors skills/intranet-message-triage/SKILL.md):
         repeatEscalation window & threshold -> IMPORTANT
   3. otherwise -> unmatched.error (default "silent" -> not important)
 
-Reserved fields parsed but NOT evaluated in v1:
-  - push.errors.consecutiveFetchFailures
-  - suppress.filenamePatterns
-  - semantic
+Diff filename filtering runs BEFORE judging, suppression first then inclusion:
+names matching any `suppress.filenamePatterns` fnmatch pattern are removed from
+added/removed; then, when `push.diff.filenameIncludePatterns` is non-empty,
+names NOT matching any include pattern are removed as well. A diff whose lists
+both become empty is NOT important. The notifier filters facts through
+`filter_diff_fact` before rendering so pushed bodies never list filtered names
+(the body notes the combined filtered count).
+
+Unknown-field rejection: any key outside the agreed schema makes the rules
+file corrupt (self-heal + group alert), so a field cannot LOOK configurable
+while doing nothing.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import time
 from pathlib import Path
@@ -34,23 +43,35 @@ from typing import Any, Optional
 
 RULES_FILENAME = "config/triage-rules.json"
 
-# Built-in defaults used only when no last-good rules exist yet.
+# Built-in defaults used only when no last-good rules exist yet. Minimal
+# self-heal set: its only job is to judge the RulesFileCorrupt self-error fact
+# important so the group gets alerted. Business defaults live solely in the
+# shipped config/triage-rules.json — keep this set free of business semantics.
 DEFAULT_RULES: dict[str, Any] = {
     "push": {
-        "diff": {"added": True, "removed": True},
+        "diff": {"added": False, "removed": False},
         "errors": {
-            "errorTypes": ["PageValidationError"],
-            "phases": ["read_config", "write_state", "write_snapshot_log", "read_rules"],
-            "consecutiveFetchFailures": 0,
+            "errorTypes": ["RulesFileCorrupt"],
+            "phases": ["read_rules"],
             "repeatEscalation": {"windowSeconds": 1800, "threshold": 3},
         },
     },
     "suppress": {"isolatedRetryableError": True, "filenamePatterns": []},
-    "unmatched": {"diff": "push", "error": "silent"},
-    "semantic": {"enabled": False},
+    "unmatched": {"diff": "silent", "error": "silent"},
 }
 
 SELF_ERROR_FACT = "RulesFileCorrupt"
+
+# Agreed schema: any key outside these sets makes the rules file corrupt.
+_ALLOWED_KEYS: dict[tuple[str, ...], set[str]] = {
+    (): {"push", "suppress", "unmatched"},
+    ("push",): {"diff", "errors"},
+    ("push", "diff"): {"added", "removed", "filenameIncludePatterns"},
+    ("push", "errors"): {"errorTypes", "phases", "repeatEscalation"},
+    ("push", "errors", "repeatEscalation"): {"windowSeconds", "threshold"},
+    ("suppress",): {"isolatedRetryableError", "filenamePatterns"},
+    ("unmatched",): {"diff", "error"},
+}
 
 
 class RulesCorruptError(ValueError):
@@ -75,28 +96,41 @@ def _expect_list_of_str(value: Any, path: str) -> list[str]:
     return list(value)
 
 
+def _reject_unknown_keys(obj: dict[str, Any], path: tuple[str, ...]) -> None:
+    allowed = _ALLOWED_KEYS[path]
+    unknown = sorted(set(obj) - allowed)
+    if unknown:
+        where = ".".join(path) or "rules"
+        raise RulesCorruptError(f"{where} has unknown keys: {unknown}")
+
+
 def validate_rules(data: Any) -> dict[str, Any]:
     """Validate the parsed rules structure; raise RulesCorruptError on failure."""
     if not isinstance(data, dict):
         raise RulesCorruptError("rules root must be an object")
+    _reject_unknown_keys(data, ())
     push = data.get("push")
     if not isinstance(push, dict):
         raise RulesCorruptError("rules.push must be an object")
+    _reject_unknown_keys(push, ("push",))
     pdiff = push.get("diff")
     if not isinstance(pdiff, dict):
         raise RulesCorruptError("rules.push.diff must be an object")
+    _reject_unknown_keys(pdiff, ("push", "diff"))
     _expect_bool(pdiff.get("added"), "push.diff.added")
     _expect_bool(pdiff.get("removed"), "push.diff.removed")
+    if pdiff.get("filenameIncludePatterns") is not None:
+        _expect_list_of_str(pdiff.get("filenameIncludePatterns"), "push.diff.filenameIncludePatterns")
     perr = push.get("errors")
     if not isinstance(perr, dict):
         raise RulesCorruptError("rules.push.errors must be an object")
+    _reject_unknown_keys(perr, ("push", "errors"))
     _expect_list_of_str(perr.get("errorTypes"), "push.errors.errorTypes")
     _expect_list_of_str(perr.get("phases"), "push.errors.phases")
-    if perr.get("consecutiveFetchFailures") is not None:
-        _expect_non_negative_int(perr.get("consecutiveFetchFailures"), "push.errors.consecutiveFetchFailures")
     esc = perr.get("repeatEscalation")
     if not isinstance(esc, dict):
         raise RulesCorruptError("rules.push.errors.repeatEscalation must be an object")
+    _reject_unknown_keys(esc, ("push", "errors", "repeatEscalation"))
     window = _expect_non_negative_int(esc.get("windowSeconds", 1800), "repeatEscalation.windowSeconds")
     threshold = _expect_non_negative_int(esc.get("threshold", 3), "repeatEscalation.threshold")
     if window <= 0 or threshold <= 0:
@@ -104,6 +138,7 @@ def validate_rules(data: Any) -> dict[str, Any]:
     sup = data.get("suppress")
     if not isinstance(sup, dict):
         raise RulesCorruptError("rules.suppress must be an object")
+    _reject_unknown_keys(sup, ("suppress",))
     if sup.get("isolatedRetryableError") is not None:
         _expect_bool(sup.get("isolatedRetryableError"), "suppress.isolatedRetryableError")
     if sup.get("filenamePatterns") is not None:
@@ -111,6 +146,7 @@ def validate_rules(data: Any) -> dict[str, Any]:
     unmatched = data.get("unmatched")
     if not isinstance(unmatched, dict):
         raise RulesCorruptError("rules.unmatched must be an object")
+    _reject_unknown_keys(unmatched, ("unmatched",))
     for key, allowed in (("diff", ("push", "silent")), ("error", ("push", "silent"))):
         val = unmatched.get(key, "silent")
         if val not in allowed:
@@ -167,6 +203,43 @@ class RulesEngine:
 
     # ---- fact evaluation ----
 
+    def _patterns(self) -> list[str]:
+        return self._last_good.get("suppress", {}).get("filenamePatterns") or []
+
+    def _include_patterns(self) -> list[str]:
+        return self._last_good.get("push", {}).get("diff", {}).get("filenameIncludePatterns") or []
+
+    @staticmethod
+    def _suppress(names: list[str], patterns: list[str]) -> tuple[list[str], int]:
+        kept = [n for n in names if not any(fnmatch.fnmatch(n, p) for p in patterns)]
+        return kept, len(names) - len(kept)
+
+    @staticmethod
+    def _include(names: list[str], patterns: list[str]) -> tuple[list[str], int]:
+        """Keep only names matching an include pattern; empty patterns keep all."""
+        if not patterns:
+            return names, 0
+        kept = [n for n in names if any(fnmatch.fnmatch(n, p) for p in patterns)]
+        return kept, len(names) - len(kept)
+
+    def filter_diff_fact(self, fact: dict[str, Any]) -> dict[str, Any]:
+        """Copy of the diff fact with suppressed/include-filtered names removed.
+
+        The notifier applies this before judging/rendering so pushed bodies
+        never list filtered names; `suppressedFilenames` records the combined
+        count of suppress-dropped and include-dropped names.
+        """
+        added, dropped_a = self._suppress(list(fact.get("added") or []), self._patterns())
+        removed, dropped_r = self._suppress(list(fact.get("removed") or []), self._patterns())
+        added, excl_a = self._include(added, self._include_patterns())
+        removed, excl_r = self._include(removed, self._include_patterns())
+        out = dict(fact)
+        out["added"], out["removed"] = added, removed
+        out["suppressedFilenames"] = (
+            int(fact.get("suppressedFilenames") or 0) + dropped_a + dropped_r + excl_a + excl_r
+        )
+        return out
+
     def _now_ts(self) -> float:
         return time.time() if self._now is None else self._now
 
@@ -179,12 +252,16 @@ class RulesEngine:
     def evaluate_diff(self, fact: dict[str, Any]) -> tuple[bool, str]:
         """fact: {monitorId, detectedAt, added:[str], removed:[str]}"""
         rules = self._last_good
-        added = fact.get("added") or []
-        removed = fact.get("removed") or []
-        suppress_patterns = rules.get("suppress", {}).get("filenamePatterns") or []
+        raw_added = list(fact.get("added") or [])
+        raw_removed = list(fact.get("removed") or [])
+        added, _ = self._suppress(raw_added, self._patterns())
+        removed, _ = self._suppress(raw_removed, self._patterns())
+        added, _ = self._include(added, self._include_patterns())
+        removed, _ = self._include(removed, self._include_patterns())
+        if not added and not removed and (raw_added or raw_removed):
+            return False, "suppressed-by-pattern"
         important = False
         reason = "unmatched"
-        # Reserved in v1: filenamePatterns suppression is parsed but not applied.
         if added and rules.get("push", {}).get("diff", {}).get("added"):
             important, reason = True, "added"
         elif removed and rules.get("push", {}).get("diff", {}).get("removed"):

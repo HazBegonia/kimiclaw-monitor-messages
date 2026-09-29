@@ -43,21 +43,23 @@ python -m src.intranet_notifier --once --dry-run
 > ⚠️ 前台跑之前必须先 `systemctl --user stop` 对应服务,否则后起实例因单实例心跳锁(`state/*-resident.lock`)安静退出,看起来没启动。
 > 通知器 `--once` 失败时退出码非 0(config 错误为 2,发送失败为 1),便于脚本判断。
 
-## 4. 配置速查(全部人工直改即生效)
+## 4. 配置速查(全部热读生效)
 
 | 文件                            | 内容                                       | 生效方式                                              |
 | ------------------------------- | ------------------------------------------ | ----------------------------------------------------- |
 | `config/monitors.json`          | 监控目标(URL、id)                          | 下一轮扫描生效                                        |
 | `config/intranet-versions.json` | 版本选择清单                               | 下一轮扫描生效(空数组=停用版本快照)                   |
-| `config/triage-rules.json`      | 重要性规则(diff/error/抖动抑制/升级窗口)   | 通知器热读,下一轮生效;坏文件自动回退 last-good 并告警 |
+| `config/triage-rules.json`      | 重要性规则(diff/error/抖动抑制/升级窗口/文件名抑制 filenamePatterns/文件名关注 filenameIncludePatterns) | 通知器热读,下一轮生效;坏文件或含未知字段自动回退 last-good 并告警 |
 | `config/notifier.json`          | chatid、目录、游标文件、secrets 路径、超时 | 通知器热读,下一轮生效                                 |
+
+变更入口两条等价:人直改;或群内 @FF 提需求,经 `skills/ff-config-assistant/SKILL.md` 草案协议(起草 → 回显 → 逐字「写入」→ 落盘 → 写后校验,失败自动回滚)由 Claw 代笔,白名单外一律拒绝。对话变更的草案台账在 `state/chat-drafts.json`,留痕在 `logs/intranet-notify/`(stage: `config-change`)。
 
 **凭证**:`state/secrets/wecom-bot.json`(gitignored,仓库内禁止明文密钥);FF 凭证副本同时保留在全局 `~/.openclaw/openclaw.json` 作为回滚基础。
 
 ## 5. 排障顺序(按信号由近及远)
 
 ```text
-1) logs/intranet-notify/YYYY-MM-DD.log   ← 发送留痕:stage=notify-send(成功)/ wecom-send + error(失败)
+1) logs/intranet-notify/YYYY-MM-DD.log   ← 发送留痕:stage=notify-send(成功)/ wecom-send + error(失败)/ config-change(对话配置变更)
 2) logs/intranet-error/YYYY-MM-DD.log    ← 采集器技术错误(JSONL:phase/errorType/statePreserved/retryable)
 3) journalctl --user -u <unit>           ← 进程级异常与重启记录
 4) state/notify-state.json               ← 游标(diffCursor / errorCursor),发送成功才推进

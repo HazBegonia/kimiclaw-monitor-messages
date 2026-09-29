@@ -30,18 +30,19 @@ def make_cfg(tmp_path: Path, *, chatid="chat-1") -> dict:
 
 
 def write_rules(cfg: dict):
-    from src.triage_rules import DEFAULT_RULES
-
+    # business rules mirroring the shipped config; DEFAULT_RULES is only the
+    # minimal self-heal set and must not leak business semantics into tests
     rules = {
-        **DEFAULT_RULES,
         "push": {
-            **DEFAULT_RULES["push"],
+            "diff": {"added": True, "removed": True},
             "errors": {
-                **DEFAULT_RULES["push"]["errors"],
                 "errorTypes": ["PageValidationError"],
                 "phases": ["read_config", "write_state", "write_snapshot_log", "read_rules"],
+                "repeatEscalation": {"windowSeconds": 1800, "threshold": 3},
             },
         },
+        "suppress": {"isolatedRetryableError": True, "filenamePatterns": []},
+        "unmatched": {"diff": "push", "error": "silent"},
     }
     Path(cfg["rulesFile"]).write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
 
@@ -315,3 +316,38 @@ def test_cursor_roundtrip_atomic(tmp_path):
     cursor = {"diffCursor": "2026-09-18_09-00-00-000.log", "errorCursor": {"date": "2026-09-18", "offset": 7}}
     save_cursor(Path(cfg["stateFile"]), cursor)
     assert load_cursor(Path(cfg["stateFile"])) == cursor
+
+
+# ---- filename suppression end-to-end (change: ff-config-assistant) ----
+
+def _set_patterns(cfg, patterns):
+    rules = json.loads(Path(cfg["rulesFile"]).read_text(encoding="utf-8"))
+    rules["suppress"]["filenamePatterns"] = patterns
+    Path(cfg["rulesFile"]).write_text(json.dumps(rules, ensure_ascii=False), encoding="utf-8")
+
+
+def test_suppressed_names_excluded_from_push_body(tmp_path):
+    cfg = make_cfg(tmp_path)
+    engine = build_engine(tmp_path, cfg)
+    _set_patterns(cfg, ["*tmp*"])
+    write_diff(cfg, "2026-09-18_10-00-00-000.log", added=["a-tmp-1.csv", "b.csv"])
+    push = FakePush([("ok", None)])
+    out = run_round(cfg, engine, empty_cursor(), push=push)
+    assert out.action == "sent"
+    body = push.calls[0]
+    assert "b.csv" in body
+    assert "a-tmp-1.csv" not in body
+    assert "已按规则忽略 1 个匹配文件名" in body
+
+
+def test_fully_suppressed_diff_stays_silent(tmp_path):
+    cfg = make_cfg(tmp_path)
+    engine = build_engine(tmp_path, cfg)
+    _set_patterns(cfg, ["*tmp*"])
+    write_diff(cfg, "2026-09-18_10-00-00-000.log", added=["a-tmp-1.csv"])
+    push = FakePush([("ok", None)])
+    out = run_round(cfg, engine, empty_cursor(), push=push)
+    assert out.action == "silent"
+    assert push.calls == []
+    # cursor still advanced past the suppressed artifact
+    assert load_cursor(Path(cfg["stateFile"]))["diffCursor"] == "2026-09-18_10-00-00-000.log"

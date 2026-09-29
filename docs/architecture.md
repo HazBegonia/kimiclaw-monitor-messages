@@ -15,7 +15,19 @@
   → 推完热重载拉活 Claw
 ```
 
-需求交互(上级 @FF 提变更)走 Claw gateway,与推送链路分离。
+## 需求交互链路(claw ↔ config,2026-09-24 起)
+
+```
+上级 @FF(企微群)
+  → Claw gateway(wecom 长连接,唯一需求入口)
+  → skills/ff-config-assistant(草案协议:起草 → 群内回显 → 逐字「写入」→ 落盘 → 写后校验,失败自动回滚)
+  → 直接改写 config/{monitors,intranet-versions,triage-rules,notifier}.json(仅此 4 个白名单文件,其余一律拒绝)
+  → py 采集器/通知器下一轮热读生效(约 10 秒,无需重启任何服务)
+```
+
+claw 与 py 链路之间**唯一接口是 config 文件**:py 代码只读不写 config,claw 不碰代码、state、密钥。白名单外需求(轮询间隔、改代码逻辑、加 schema 外字段等)直接拒绝并说明人工路径。草案台账 `state/chat-drafts.json`,留痕 `logs/intranet-notify/`(stage: `config-change`)。
+
+已退役的旧路线(均无残留):OpenClaw cron 任务(`openclaw cron list` 为空)、监控器唤起 triage 会话(`config/triage-message.txt` 保持 0 字节)、需求台账 `state/requirements.json`(已删,备份 `state/backup-requirements-2026-09-24.json`)、事件 outbox `state/openclaw-pending/`、旧 skill `intranet-message-triage`(存档于 `wiki/`)。
 
 ## 三个 systemd 服务
 
@@ -47,7 +59,7 @@ FF 长连接平时归 Claw 的 wecom 插件(收 @FF 需求);`src/bot_tool.py` `p
 - 监控器自身错误(`PageValidationError`、`read_config` / `write_state` / `write_snapshot_log` / `read_rules` phase)推;
 - 孤立可重试抖动抑制;同 monitorId+phase 30 分钟窗口 ≥3 次升级为推送;
 - 规则文件损坏 → 沿用 last-good + 群里收到「规则文件损坏」告警;
-- 保留字段 `filenamePatterns` / `consecutiveFetchFailures` / `semantic` 暂不生效,等上级定义。
+- 文件名过滤先 suppress 后 include:`suppress.filenamePatterns`(fnmatch 通配)命中的文件名判定前剔除;`push.diff.filenameIncludePatterns` 非空时只推命中的文件名;剔除总数在推送正文合并注明;schema 之外的未知字段直接判规则损坏(防「假配置」;`semantic`/`consecutiveFetchFailures` 占位字段已随 change ff-config-assistant 移除)。
 
 ## 游标:发送成功才推进
 
@@ -56,7 +68,7 @@ FF 长连接平时归 Claw 的 wecom 插件(收 @FF 需求);`src/bot_tool.py` `p
 ## 凭证与配置
 
 - FF Bot ID/Secret 存 gitignored 的 `state/secrets/wecom-bot.json`(复制自 `~/.openclaw/openclaw.json` channels.wecom.*,该文件保持原样作为回滚基础);目标群 chatid 在 `config/notifier.json`。**仓库内禁止明文密钥。**
-- `config/monitors.json`、`config/intranet-versions.json`、`config/triage-rules.json`、`config/notifier.json` 均为人工直改即生效,无自动派生/覆盖机制。
+- `config/monitors.json`、`config/intranet-versions.json`、`config/triage-rules.json`、`config/notifier.json` 全部热读生效。两条等价入口(2026-09-24 起,change: ff-config-assistant):人直改;或群内 @FF 提需求,经 `skills/ff-config-assistant/SKILL.md` 草案协议(起草 → 回显 → 逐字「写入」→ 落盘 → 写后校验,失败自动回滚)由 Claw 代笔,白名单外一律拒绝。草案台账 `state/chat-drafts.json`,留痕 `logs/intranet-notify/`(stage: `config-change`)。
 
 ## 前置约束
 

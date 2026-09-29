@@ -294,6 +294,7 @@ def render_markdown(important_diffs: list[dict[str, Any]], important_errors: lis
 
     added = sorted({name for f in important_diffs for name in f.get("added", [])})
     removed = sorted({name for f in important_diffs for name in f.get("removed", [])})
+    suppressed = sum(int(f.get("suppressedFilenames") or 0) for f in important_diffs)
     error_lines = [_error_line(f) for f in important_errors]
 
     def build(cap: int) -> str:
@@ -304,6 +305,8 @@ def render_markdown(important_diffs: list[dict[str, Any]], important_errors: lis
             parts.append(_fmt_section("删除文件", removed, tick=True, cap=cap))
         if error_lines:
             parts.append(_fmt_section("监控错误", error_lines, unit="条", cap=cap))
+        if suppressed:
+            parts.append(f"已按规则忽略 {suppressed} 个匹配文件名")
         return "\n".join(parts)
 
     for cap in (SECTION_LIMIT, 12, 10, 8, 6, 4, 3, 2, 1):
@@ -358,9 +361,9 @@ def run_round(
     important_diffs: list[dict[str, Any]] = []
     important_errors: list[dict[str, Any]] = []
     for fact in facts["diffs"]:
-        important, _ = engine.evaluate_diff(fact)
+        important, _ = engine.evaluate_diff(fact)  # judges the RAW fact (suppression-aware)
         if important:
-            important_diffs.append(fact)
+            important_diffs.append(engine.filter_diff_fact(fact))  # render without suppressed names
     for fact in facts["errors"] + self_error_facts:
         important, _ = engine.evaluate_error(fact)
         if important:

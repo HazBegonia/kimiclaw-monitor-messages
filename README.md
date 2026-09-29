@@ -41,18 +41,25 @@
 # 1. 获取代码
 git clone <仓库地址> && cd kimiclaw-monitor-messages   # 或直接解 tar 包
 
-# 2. 一键安装：建 Python 环境、装依赖、从模板生成 config、装 systemd unit 并启动
-scripts/linux/install.sh
-#    可选参数：--python /path/to/python  指定解释器（默认优先 conda env，其次建 .venv）
-#             --no-start               只安装不启动
+# 2. 准备 Python 环境（二选一）
+#    a. conda（推荐，与 FF 服务器一致）：
+conda create -y -n kimiclaw-monitor-messages python=3.11
+#    b. 没有 conda 就跳过这步，install.sh 会在仓库下自动建 .venv
 
-# 3. 填写机器人凭证（install.sh 已从模板生成空文件）
+# 3. 一键安装：装依赖、从模板生成 config、装 systemd unit 并启动
+scripts/linux/install.sh
+#    用了 conda 时指定解释器：
+#    scripts/linux/install.sh --python "$(conda run -n kimiclaw-monitor-messages python -c 'import sys; print(sys.executable)')"
+#    其他可选参数：--no-start 只安装不启动
+#    不指定 --python 时 install.sh 自动探测：已有 conda env kimiclaw-monitor-messages → 用它；否则建 .venv
+
+# 4. 填写机器人凭证（install.sh 已从模板生成空文件）
 vim state/secrets/wecom-bot.json
 #    { "botId": "你的BotID", "secret": "你的Secret" }
 
-# 4. 按实际环境编辑 config/ 下四个文件（见下节「配置说明」）
+# 5. 按实际环境编辑 config/ 下四个文件（见下节「配置说明」）
 
-# 5. 改完重启生效（配置本身热读，但凭证是连接时读的，首次填好后重启一次最稳妥）
+# 6. 改完重启生效（配置本身热读，但凭证是连接时读的，首次填好后重启一次最稳妥）
 systemctl --user restart kimiclaw-monitor kimiclaw-notifier
 ```
 
@@ -84,8 +91,8 @@ python -m src.intranet_notifier --once
 systemctl --user status kimiclaw-monitor kimiclaw-notifier
 journalctl --user -u kimiclaw-notifier -f
 
-# 4.（可选）跑测试自检
-pip install -r requirements-dev.txt && pytest
+# 4.（可选）跑测试自检（pytest 已在 requirements.txt 里，install.sh 已装）
+pytest
 ```
 
 ## @机器人 提需求

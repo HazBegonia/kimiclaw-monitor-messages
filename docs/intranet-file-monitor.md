@@ -43,7 +43,7 @@ python -m src.intranet_filename_monitor --interval 10 --timeout 10   # 常驻
 python -m src.intranet_filename_monitor --once                       # 单轮
 ```
 
-主要参数:`--url`(覆盖目标)、`--interval`、`--timeout`、`--state`、`--log-dir`、`--focus-log-dir`、`--error-log-dir`、`--versions-config`、`--monitors-config`。`--event-url` / `--event-token` / `--outbox` 是已退役的 OpenClaw 事件唤醒链路的休眠代码,不使用(`config/triage-message.txt` 已清空为 0 字节)。
+主要参数:`--url`(覆盖目标)、`--interval`、`--timeout`、`--state`、`--log-dir`、`--focus-log-dir`、`--error-log-dir`、`--versions-config`、`--monitors-config`。已退役的 OpenClaw 事件唤醒链路(`--event-url` / `--event-token` / `--outbox` / `--triage-message-file` 及 wake/outbox 相关代码)已于 2026-09-29 从代码中移除。
 
 ## 限制:只能轮询,准实时
 

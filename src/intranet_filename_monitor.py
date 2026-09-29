@@ -1,6 +1,6 @@
 """Resident polling monitor for configurable fields in an intranet HTML page."""
 from __future__ import annotations
-import argparse, fnmatch, hashlib, json, os, re, shutil, subprocess, sys, time, uuid
+import argparse, fnmatch, hashlib, json, os, re, sys, time, uuid
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -13,8 +13,6 @@ DEFAULT_URL="http://172.16.30.20:8011/"; DEFAULT_INTERVAL=5.0; DEFAULT_TIMEOUT=1
 DEFAULT_ERROR_LOG_DIR = Path("logs/intranet-error")
 ERROR_LOG_RETENTION_DAYS = 30
 ERROR_LOG_MAX_BYTES = 100 * 1024 * 1024
-DEFAULT_TRIAGE_MESSAGE_FILE = Path("config/triage-message.txt")
-WAKE_GRACE_SECONDS = 15.0
 RESIDENT_LOCK_PATH = Path("state/monitor-resident.lock")
 
 class PageValidationError(RuntimeError):
@@ -345,99 +343,7 @@ def fetch_filenames(url: str, timeout: float)->set[str]:
     LAST_FETCH_METRICS.update(bytes=nbytes, duration=duration)
     return parse_filenames(html,url)
 
-def _send_event(event_url,payload,timeout,token=None):
-    h={"Content-Type":"application/json"};
-    if token:h["Authorization"]="Bearer "+token
-    with urlopen(Request(event_url,data=json.dumps(payload).encode(),headers=h,method="POST"),timeout=timeout) as r:
-        if not 200<=getattr(r,"status",r.getcode())<300:raise RuntimeError("event delivery failed")
-
-def _queue_event(outbox,payload):_atomic_write(outbox/(payload["event_id"]+".json"),json.dumps(payload,ensure_ascii=False,indent=2)+"\n")
-
-def deliver_pending(outbox: Path, event_url: str, timeout: float, token: str|None=None) -> int:
-    """Retry queued events; successful files are removed."""
-    if not outbox.exists(): return 0
-    delivered=0
-    for path in sorted(outbox.glob("*.json")):
-        try:
-            _send_event(event_url,json.loads(path.read_text(encoding="utf-8")),timeout,token)
-            path.unlink(); delivered += 1
-        except Exception:
-            continue
-    return delivered
-
-def load_triage_message(path: Path) -> str | None:
-    """Read the fixed triage instruction; None disables agent wake-up."""
-    try:
-        if not path.exists(): return None
-        text = path.read_text(encoding="utf-8-sig").strip()
-        return text or None
-    except Exception:
-        return None
-
-def spawn_triage_agent(message: str, grace: float = WAKE_GRACE_SECONDS) -> bool:
-    """Spawn a one-shot triage agent; True when launched and not failed within grace."""
-    kwargs: dict[str, object] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-    else:
-        kwargs["start_new_session"] = True
-    try:
-        cli = shutil.which("openclaw") or "openclaw.cmd"
-        proc = subprocess.Popen([cli, "agent", "--local", "--agent", "main", "-m", message], **kwargs)
-    except Exception as e:
-        print(f"triage wake spawn failed: {_redact(e)}", file=sys.stderr, flush=True)
-        return False
-    try:
-        rc = proc.wait(timeout=grace)
-        if rc != 0:
-            print(f"triage wake agent exited with code {rc}", file=sys.stderr, flush=True)
-            return False
-        return True
-    except subprocess.TimeoutExpired:
-        print("triage wake delivered (agent still running)", flush=True)
-        return True
-    except Exception as e:
-        print(f"triage wake wait failed: {_redact(e)}", file=sys.stderr, flush=True)
-        return False
-
-def clear_outbox(outbox: Path) -> int:
-    """Remove all queued wake events; one successful wake covers the whole backlog."""
-    removed = 0
-    if not outbox.exists(): return 0
-    for path in outbox.glob("*.json"):
-        try: path.unlink(); removed += 1
-        except Exception: continue
-    return removed
-
-def deliver_pending_wake(outbox: Path, message: str, grace: float = WAKE_GRACE_SECONDS) -> int:
-    """Retry wake-up once when events are queued; success clears the whole outbox."""
-    try:
-        if not outbox.exists() or not any(outbox.glob("*.json")): return 0
-        if not spawn_triage_agent(message, grace): return 0
-        return clear_outbox(outbox)
-    except Exception:
-        return 0
-
-def wake_triage(marks: list[str], outbox: Path, message: str, grace: float = WAKE_GRACE_SECONDS) -> bool:
-    """Spawn triage once for this round's marks; on failure queue a deduped wake event."""
-    if not marks: return False
-    marks = sorted(marks)
-    payload = {
-        "event_id": hashlib.sha256("|".join(marks).encode()).hexdigest(),
-        "monitor_id": ",".join(sorted({m.split(":")[1] for m in marks})),
-        "log_path": next((m.split(":", 2)[2] for m in marks if m.startswith("diff:")), ""),
-        "detected_at": datetime.now(TIME_ZONE).isoformat(),
-    }
-    try:
-        if spawn_triage_agent(message, grace):
-            clear_outbox(outbox)
-            return True
-        _queue_event(outbox, payload)
-    except Exception:
-        pass
-    return False
-
-def run_once(url,state_path,log_dir,timeout,*,event_url=None,outbox=None,event_token=None,monitor_id="intranet-root",min_links=0,profile=None,confirm_polls=1,selected_versions=None,focus_log_dir=Path("logs/intranet-focus"),error_log_dir=DEFAULT_ERROR_LOG_DIR,mode="once"):
+def run_once(url,state_path,log_dir,timeout,*,monitor_id="intranet-root",min_links=0,profile=None,confirm_polls=1,selected_versions=None,focus_log_dir=Path("logs/intranet-focus"),error_log_dir=DEFAULT_ERROR_LOG_DIR,mode="once"):
     dt=datetime.now(TIME_ZONE); phase = "fetch_page"; state_preserved = state_path.exists(); operation_path = None; written_paths = []
     try:
         if profile:
@@ -484,12 +390,6 @@ def run_once(url,state_path,log_dir,timeout,*,event_url=None,outbox=None,event_t
             written_paths.append(str(log))
         phase = "write_state"; operation_path = state_path; _write_state(state_path,snap,dt,version_files)
         written_paths.append(str(state_path))
-        if log and event_url:
-            event_key=f"{monitor_id}|{prev.get('fingerprint','')}|{fingerprint(snap)}|{Path(log).name}"
-            payload={"event_id":hashlib.sha256(event_key.encode()).hexdigest(),"monitor_id":monitor_id,"log_path":str(log),"detected_at":dt.isoformat()}
-            try:_send_event(event_url,payload,timeout,event_token)
-            except Exception:
-                if outbox:outbox.mkdir(parents=True,exist_ok=True); _queue_event(outbox,payload)
         root_diff=diff.get("root_files", {}) if isinstance(diff.get("root_files", {}), dict) else {}
         return {"baseline":False,"added":root_diff.get("added",[]),"removed":root_diff.get("removed",[]),"log":str(log) if log else None,"versionLogs":version_logs,"count":len(files),"bytes":nbytes,"duration":duration}
     except Exception as error:
@@ -497,20 +397,15 @@ def run_once(url,state_path,log_dir,timeout,*,event_url=None,outbox=None,event_t
         raise
 
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--url"); p.add_argument("--interval",type=float,default=DEFAULT_INTERVAL); p.add_argument("--timeout",type=float,default=DEFAULT_TIMEOUT); p.add_argument("--confirm-polls",type=int,default=1); p.add_argument("--state",type=Path,default=None); p.add_argument("--log-dir",type=Path,default=Path("logs/intranet-diff")); p.add_argument("--focus-log-dir",type=Path,default=Path("logs/intranet-focus")); p.add_argument("--error-log-dir",type=Path,default=DEFAULT_ERROR_LOG_DIR); p.add_argument("--versions-config",type=Path,default=Path("config/intranet-versions.json")); p.add_argument("--monitors-config",type=Path,default=Path("config/monitors.json")); p.add_argument("--profile",type=Path,help="JSON field profile"); p.add_argument("--event-url"); p.add_argument("--event-token"); p.add_argument("--outbox",type=Path,default=Path("state/openclaw-pending")); p.add_argument("--triage-message-file",type=Path,default=DEFAULT_TRIAGE_MESSAGE_FILE); p.add_argument("--once",action="store_true"); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--url"); p.add_argument("--interval",type=float,default=DEFAULT_INTERVAL); p.add_argument("--timeout",type=float,default=DEFAULT_TIMEOUT); p.add_argument("--confirm-polls",type=int,default=1); p.add_argument("--state",type=Path,default=None); p.add_argument("--log-dir",type=Path,default=Path("logs/intranet-diff")); p.add_argument("--focus-log-dir",type=Path,default=Path("logs/intranet-focus")); p.add_argument("--error-log-dir",type=Path,default=DEFAULT_ERROR_LOG_DIR); p.add_argument("--versions-config",type=Path,default=Path("config/intranet-versions.json")); p.add_argument("--monitors-config",type=Path,default=Path("config/monitors.json")); p.add_argument("--profile",type=Path,help="JSON field profile"); p.add_argument("--once",action="store_true"); a=p.parse_args(argv)
     if a.interval<=0 or a.timeout<=0 or a.confirm_polls<=0:print("--interval, --timeout and --confirm-polls must be positive",file=sys.stderr); return 2
     exit_code=0; mode="once" if a.once else "resident"
     lock_owner = None if a.once else acquire_resident_lock(RESIDENT_LOCK_PATH, a.interval)
     if not a.once and lock_owner is None:
         return 0
-    triage_message=load_triage_message(a.triage_message_file)
-    triage_warning_pending = triage_message is None
     try:
         while True:
-            marks=[]
             try:
-                if a.event_url: deliver_pending(a.outbox,a.event_url,a.timeout,a.event_token)
-                if triage_message: deliver_pending_wake(a.outbox,triage_message)
                 config_path=None
                 try:
                     if a.url:
@@ -525,25 +420,19 @@ def main(argv=None):
                     config_path=a.versions_config; versions=load_selected_versions(a.versions_config)
                 except Exception as e:
                     record_error(a.error_log_dir, monitor_id="intranet-root", mode=mode, phase="read_config", error=e, path=config_path, state_preserved=False)
-                    marks.append("error:read_config")
                     raise
-                if triage_warning_pending and targets:
-                    print(f"triage message file unavailable: {a.triage_message_file}; agent wake disabled",file=sys.stderr,flush=True)
-                    triage_warning_pending = False
                 for target in targets:
                     state_path=a.state or Path("state")/f"intranet-files-{target['id']}.json"
                     try:
-                        r=run_once(target["url"],state_path,a.log_dir,a.timeout,event_url=a.event_url,outbox=a.outbox,event_token=a.event_token,monitor_id=target["id"],profile=target.get("profile") or profile,confirm_polls=a.confirm_polls,selected_versions=versions,focus_log_dir=a.focus_log_dir,error_log_dir=a.error_log_dir,mode=mode)
+                        r=run_once(target["url"],state_path,a.log_dir,a.timeout,monitor_id=target["id"],profile=target.get("profile") or profile,confirm_polls=a.confirm_polls,selected_versions=versions,focus_log_dir=a.focus_log_dir,error_log_dir=a.error_log_dir,mode=mode)
                         if r["baseline"]:print(f"baseline saved [{target['id']}]: {r['count']} files",flush=True)
-                        elif r["log"]:print(f"diff [{target['id']}]: {r['log']}",flush=True); marks.append(f"diff:{target['id']}:{Path(r['log']).name}")
+                        elif r["log"]:print(f"diff [{target['id']}]: {r['log']}",flush=True)
                     except Exception as e:
                         print(f"scan failed [{target['id']}]: {e}",file=sys.stderr,flush=True)
-                        marks.append(f"error:{target['id']}")
                         exit_code=1
             except Exception as e:
                 print(f"scan failed: {e}",file=sys.stderr,flush=True)
                 exit_code=1
-            if triage_message and marks: wake_triage(marks,a.outbox,triage_message)
             if a.once:return exit_code
             if not refresh_resident_lock(RESIDENT_LOCK_PATH, lock_owner):
                 return 1

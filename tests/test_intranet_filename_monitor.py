@@ -86,17 +86,6 @@ def test_validate_page_rejects_non_directory_or_truncated_html():
         validate_page("<html><title>Directory listing for /</title><h1>Directory listing for /</h1>")
 
 
-def test_event_id_is_stable_for_same_change(tmp_path, monkeypatch):
-    values = iter([{"a.csv"}, {"a.csv", "b.csv"}])
-    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: next(values))
-    sent = []
-    monkeypatch.setattr("src.intranet_filename_monitor._send_event", lambda *args: sent.append(args[1]))
-    state, logs = tmp_path / "state.json", tmp_path / "logs"
-    run_once("http://example/", state, logs, 1)
-    run_once("http://example/", state, logs, 1, event_url="http://event", outbox=tmp_path / "outbox")
-    assert len(sent) == 1
-    assert sent[0]["event_id"]
-
 def test_load_versions_and_filter_multiple_selectors(tmp_path):
     config = tmp_path / "versions.json"
     config.write_text(json.dumps({"selectedVersions": [
@@ -399,7 +388,6 @@ def test_main_resident_takes_over_stale_lock(tmp_path, monkeypatch):
     lock.write_text(json.dumps({"pid": 123, "heartbeat": time.time() - 10, "owner": "stale"}), encoding="utf-8")
     cfg = tmp_path / "monitors.json"
     cfg.write_text(json.dumps({"targets": [{"id": "t1", "url": "http://example/"}]}), encoding="utf-8")
-    message = _triage_msg(tmp_path)
     seen = []
     def scan(*args, **kwargs):
         data = json.loads(lock.read_text(encoding="utf-8"))
@@ -412,8 +400,7 @@ def test_main_resident_takes_over_stale_lock(tmp_path, monkeypatch):
         raise KeyboardInterrupt()
     monkeypatch.setattr("src.intranet_filename_monitor.time.sleep", stop_after_refresh)
     with pytest.raises(KeyboardInterrupt):
-        main(["--interval", "1", "--monitors-config", str(cfg), "--versions-config", str(_empty_versions_config(tmp_path)),
-              "--triage-message-file", str(message)])
+        main(["--interval", "1", "--monitors-config", str(cfg), "--versions-config", str(_empty_versions_config(tmp_path))])
     assert seen and seen[0]["pid"] == os.getpid() and seen[0]["owner"] != "stale"
     assert refreshed[0]["owner"] == seen[0]["owner"]
     assert refreshed[0]["heartbeat"] >= seen[0]["heartbeat"]
@@ -429,119 +416,9 @@ def test_main_resident_idles_for_empty_monitors_config(tmp_path, monkeypatch, ca
     cfg.write_text(json.dumps({"targets": []}), encoding="utf-8")
     monkeypatch.setattr("src.intranet_filename_monitor.fetch_page", lambda *_: (_ for _ in ()).throw(AssertionError("must not fetch")))
     monkeypatch.setattr("src.intranet_filename_monitor.record_error", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not log")))
-    monkeypatch.setattr("src.intranet_filename_monitor.wake_triage", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not wake")))
     monkeypatch.setattr("src.intranet_filename_monitor.time.sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt()))
     with pytest.raises(KeyboardInterrupt):
-        main(["--monitors-config", str(cfg), "--versions-config", str(_empty_versions_config(tmp_path)),
-              "--triage-message-file", str(_triage_msg(tmp_path))])
+        main(["--monitors-config", str(cfg), "--versions-config", str(_empty_versions_config(tmp_path))])
     captured = capsys.readouterr()
     assert not captured.out and not captured.err
     assert not (tmp_path / "state" / "monitor-resident.lock").exists()
-
-
-def _triage_msg(tmp_path):
-    msg = tmp_path / "triage-message.txt"
-    msg.write_text("triage instruction", encoding="utf-8")
-    return msg
-
-
-def test_main_no_new_output_does_not_wake(tmp_path, monkeypatch):
-    from src.intranet_filename_monitor import main
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: {"a.csv"})
-    calls = []
-    monkeypatch.setattr("src.intranet_filename_monitor.spawn_triage_agent", lambda *a, **k: calls.append(a) or True)
-    argv = ["--once", "--url", "http://example/", "--triage-message-file", str(_triage_msg(tmp_path))]
-    assert main(argv) == 0
-    assert main(argv) == 0
-    assert calls == []
-
-
-def test_main_wakes_once_on_new_diff(tmp_path, monkeypatch):
-    from src.intranet_filename_monitor import main
-    monkeypatch.chdir(tmp_path)
-    values = iter([{"a.csv"}, {"a.csv", "b.csv"}])
-    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: next(values))
-    calls = []
-    monkeypatch.setattr("src.intranet_filename_monitor.spawn_triage_agent", lambda *a, **k: calls.append(a) or True)
-    argv = ["--once", "--url", "http://example/", "--triage-message-file", str(_triage_msg(tmp_path))]
-    assert main(argv) == 0
-    assert calls == []
-    assert main(argv) == 0
-    assert len(calls) == 1
-
-
-def test_main_wakes_on_scan_error(tmp_path, monkeypatch):
-    from src.intranet_filename_monitor import main
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames",
-        lambda *_: (_ for _ in ()).throw(TimeoutError("offline")))
-    calls = []
-    monkeypatch.setattr("src.intranet_filename_monitor.spawn_triage_agent", lambda *a, **k: calls.append(a) or True)
-    argv = ["--once", "--url", "http://example/", "--triage-message-file", str(_triage_msg(tmp_path))]
-    assert main(argv) == 1
-    assert len(calls) == 1
-    assert list((tmp_path / "logs" / "intranet-error").glob("*.log"))
-
-
-def test_main_merges_multi_target_wake_into_one(tmp_path, monkeypatch):
-    from src.intranet_filename_monitor import main
-    monkeypatch.chdir(tmp_path)
-    pages = iter([_listing_html("a.csv")] * 2 + [_listing_html("a.csv", "b.csv")] * 2)
-    monkeypatch.setattr("src.intranet_filename_monitor.fetch_page", lambda *_: (next(pages), 100, 0.1))
-    calls = []
-    monkeypatch.setattr("src.intranet_filename_monitor.spawn_triage_agent", lambda *a, **k: calls.append(a) or True)
-    cfg = tmp_path / "monitors.json"
-    cfg.write_text(json.dumps({"targets": [
-        {"id": "t1", "url": "http://a/", "profile": {"root_files": {"type": "link_set", "extension": ".csv"}}},
-        {"id": "t2", "url": "http://b/", "profile": {"root_files": {"type": "link_set", "extension": ".csv"}}}]}), encoding="utf-8")
-    argv = ["--once", "--monitors-config", str(cfg), "--triage-message-file", str(_triage_msg(tmp_path))]
-    assert main(argv) == 0
-    assert calls == []
-    assert main(argv) == 0
-    assert len(calls) == 1
-
-
-def test_wake_failure_queues_and_retry_clears_outbox(tmp_path, monkeypatch):
-    from src.intranet_filename_monitor import main
-    monkeypatch.chdir(tmp_path)
-    values = iter([{"a.csv"}, {"a.csv", "b.csv"}, {"a.csv", "b.csv"}, {"a.csv", "b.csv"}])
-    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: next(values))
-    box = {"fail": True}
-    monkeypatch.setattr("src.intranet_filename_monitor.spawn_triage_agent", lambda *a, **k: not box["fail"])
-    argv = ["--once", "--url", "http://example/", "--triage-message-file", str(_triage_msg(tmp_path))]
-    assert main(argv) == 0
-    assert main(argv) == 0
-    outbox = tmp_path / "state" / "openclaw-pending"
-    queued = list(outbox.glob("*.json"))
-    assert len(queued) == 1
-    assert json.loads(queued[0].read_text(encoding="utf-8"))["event_id"]
-    main(argv)
-    assert len(list(outbox.glob("*.json"))) == 1
-    box["fail"] = False
-    main(argv)
-    assert not list(outbox.glob("*.json"))
-
-
-def test_wake_event_dedup_by_marks(tmp_path, monkeypatch):
-    from src.intranet_filename_monitor import wake_triage
-    monkeypatch.setattr("src.intranet_filename_monitor.spawn_triage_agent", lambda *a, **k: False)
-    outbox = tmp_path / "outbox"
-    wake_triage(["diff:t1:x.log"], outbox, "msg")
-    wake_triage(["diff:t1:x.log"], outbox, "msg")
-    assert len(list(outbox.glob("*.json"))) == 1
-    wake_triage(["diff:t1:y.log"], outbox, "msg")
-    assert len(list(outbox.glob("*.json"))) == 2
-
-
-def test_wake_disabled_when_message_file_missing(tmp_path, monkeypatch):
-    from src.intranet_filename_monitor import main
-    monkeypatch.chdir(tmp_path)
-    values = iter([{"a.csv"}, {"a.csv", "b.csv"}])
-    monkeypatch.setattr("src.intranet_filename_monitor.fetch_filenames", lambda *_: next(values))
-    calls = []
-    monkeypatch.setattr("src.intranet_filename_monitor.spawn_triage_agent", lambda *a, **k: calls.append(a) or True)
-    argv = ["--once", "--url", "http://example/", "--triage-message-file", str(tmp_path / "missing.txt")]
-    assert main(argv) == 0
-    assert main(argv) == 0
-    assert calls == []

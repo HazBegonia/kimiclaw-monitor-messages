@@ -5,17 +5,13 @@ param(
     [double]$Interval = 5,
     [double]$Timeout = 10,
     [ValidateRange(1, 300)]
-    [int]$RestartDelaySeconds = 5,
-    [string]$EventUrl = '',
-    [string]$EventToken = ''
+    [int]$RestartDelaySeconds = 5
 )
 
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $argsList = @('-m', 'src.intranet_filename_monitor', '--interval', $Interval, '--timeout', $Timeout)
 $effectiveRestartDelaySeconds = [Math]::Max($RestartDelaySeconds, [int][Math]::Floor($Interval * 2) + 1)
-if ($EventUrl) { $argsList += @('--event-url', $EventUrl) }
-if ($EventToken) { $argsList += @('--event-token', $EventToken) }
 if ($Mode -eq 'Once') { $argsList += '--once' }
 $logDir = Join-Path $workspace 'logs\intranet-scan'
 New-Item -ItemType Directory -Force $logDir | Out-Null

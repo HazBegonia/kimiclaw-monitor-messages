@@ -13,8 +13,8 @@
 
 ## 服务（systemd --user，unit 由 `scripts/linux/install.sh` 从 `scripts/linux/*.service.template` 渲染到 ~/.config/systemd/user/）
 
-- kimiclaw-monitor.service：python -m src.intranet_filename_monitor --interval 10 --timeout 10，Restart=always
-- kimiclaw-notifier.service：python -m src.intranet_notifier --interval 10，PATH 含 node22/bin（bot_tool 拉活 Claw 要用 openclaw CLI）
+- kimiclaw-monitor.service：python -m src.intranet_filename_monitor，Restart=always；默认间隔/超时读取 src/.env
+- kimiclaw-notifier.service：python -m src.intranet_notifier，PATH 含 node22/bin（bot_tool 拉活 Claw 要用 openclaw CLI）
 - kimiclaw-openclaw-gateway.service：openclaw gateway run
 
 ## 常用命令（ssh FF 后执行）
@@ -30,3 +30,27 @@
 - bot_tool 借线推送仍会短暂踢掉 Claw 的 wecom 连接，推完自动 config set 拉活（欠账在 state/bot-tool-state.json）。
 - FF botId 连接独占：Windows 侧三个计划任务已 Disabled，不可两边同时跑。
 - 回滚 Windows：本机执行 Enable-ScheduledTask + Start-ScheduledTask（KimiclawIntranetResident / KimiclawIntranetNotifier / KimiclawOpenclawGateway），并先停 Linux 侧三服务。
+
+## 通用 program 脚本控制
+
+程序管理器由 Claw 按需调用，不新增 systemd 服务。在 `program/.env` 中登记测试脚本：
+
+```dotenv
+BASH=heartbeat.sh,disk_check.sh,system_info.sh
+```
+
+确认 `skills.load.extraDirs` 指向本仓库 `skills/` 并重启 gateway 后，`ff-program-assistant` 会处理 @FF 请求。
+
+先执行本地验证：
+
+```bash
+cd /home/u504/kimiclaw-monitor-messages
+python -m src.program_manager status
+python -m src.program_manager start heartbeat.sh 1
+python -m src.program_manager status
+python -m src.program_manager stop heartbeat.sh
+```
+
+再在测试群依次发送 @FF 查询运行脚本、启动 heartbeat.sh、重复启动、停止和目录外脚本请求，核对群回复与 `status` 一致。不要直接用生产业务脚本做首次验收。
+
+回滚只停用 `skills/ff-program-assistant/SKILL.md`，并先停止由本框架启动的实例；现有采集、通知和 gateway 不需要回滚。

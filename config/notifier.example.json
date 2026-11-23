@@ -7,6 +7,7 @@
   "notifyLogDir": "logs/intranet-notify",
   "stateFile": "state/notify-state.json",
   "rulesFile": "config/triage-rules.json",
+  "templateFile": "config/notify-template.json",
   "lockFile": "state/notifier-resident.lock",
   "sourceUrl": "http://<内网页面地址>/",
   "timeouts": {

@@ -43,14 +43,18 @@ python -m src.intranet_notifier --once --dry-run
 > ⚠️ 前台跑之前必须先 `systemctl --user stop` 对应服务,否则后起实例因单实例心跳锁(`state/*-resident.lock`)安静退出,看起来没启动。
 > 通知器 `--once` 失败时退出码非 0(config 错误为 2,发送失败为 1),便于脚本判断。
 
-## 4. 配置速查(全部热读生效)
+## 4. 配置速查(JSON 热读,.env 重启生效)
 
-| 文件                            | 内容                                       | 生效方式                                              |
-| ------------------------------- | ------------------------------------------ | ----------------------------------------------------- |
-| `config/monitors.json`          | 监控目标(URL、id)                          | 下一轮扫描生效                                        |
-| `config/intranet-versions.json` | 版本选择清单                               | 下一轮扫描生效(空数组=停用版本快照)                   |
+| 文件                            | 内容                                                                                                    | 生效方式                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `config/monitors.json`          | 监控目标(URL、id)                                                                                       | 下一轮扫描生效                                                    |
+| `config/intranet-versions.json` | 版本选择清单                                                                                            | 下一轮扫描生效(空数组=停用版本快照)                               |
 | `config/triage-rules.json`      | 重要性规则(diff/error/抖动抑制/升级窗口/文件名抑制 filenamePatterns/文件名关注 filenameIncludePatterns) | 通知器热读,下一轮生效;坏文件或含未知字段自动回退 last-good 并告警 |
-| `config/notifier.json`          | chatid、目录、游标文件、secrets 路径、超时 | 通知器热读,下一轮生效                                 |
+| `config/notifier.json`          | chatid、目录、游标文件、secrets 路径、模板路径、超时                                                    | 通知器配置                                                        |
+| `config/notify-template.json`   | 推送标题、来源、区块内容与顺序、错误摘要、截断提示                                                      | 有消息要发送时热读,下一次通知生效                                 |
+| `src/.env`                      | DEFAULT_URL、DEFAULT_INTERVAL、DEFAULT_TIMEOUT、时区、日志与锁路径、渲染限制                            | 模块加载时读取,修改后重启对应服务                                 |
+
+代码通过 `python-dotenv` 直接读取 `src/.env` 中的常量,系统环境变量优先。模板的 `sections` 数组决定输出哪些区块及其顺序;删除整个区块即不输出该内容,区块字段和占位符由 `IntranetOutput` 严格校验。内网告警和程序管理共用 `Output` 基类进行模板操作、JSONL 日志写入和终端输出。
 
 变更入口两条等价:人直改;或群内 @FF 提需求,经 `skills/ff-config-assistant/SKILL.md` 草案协议(起草 → 回显 → 逐字「写入」→ 落盘 → 写后校验,失败自动回滚)由 Claw 代笔,白名单外一律拒绝。对话变更的草案台账在 `state/chat-drafts.json`,留痕在 `logs/intranet-notify/`(stage: `config-change`)。
 
@@ -82,3 +86,35 @@ Start-ScheduledTask   -TaskName KimiclawIntranetResident, KimiclawIntranetNotifi
 ```
 
 游标两界通用,回滚无重复推送。注意任何时候只能一侧在线(botId 连接独占)。
+
+## 7. program 脚本排障
+
+查询实际运行状态：
+
+```bash
+python -m src.program_manager status
+```
+
+操作日志：
+
+```bash
+tail -f logs/program-control/$(date +%F).log
+```
+
+- **registered 与 running 不同**：前者来自 `.env` 的 BASH 注册清单，后者是逐项查询到的实际 Bash 进程。
+- **日志显示启动但 running 没有脚本**：进程已退出；查看对应 `logs/program-control/output/` 中的脚本输出。
+- **重复启动返回 alreadyRunning**：查询已找到进程，不会重复创建；需要换参数时先停止再启动。
+- **未注册脚本被拒绝**：由管理员把脚本加入 `program/.env` 的 BASH，Claw 不读取或修改 `.env`。
+- **Claw 回复与实际不符**：查看 gateway 日志及 `skills/ff-program-assistant/SKILL.md` 是否加载；最终以固定 CLI 的 JSON 结果为准。
+
+停用该功能前先运行 `status`，对仍在运行的脚本逐个执行 `python -m src.program_manager stop <脚本名>`，再停用 Skill。
+
+## 8. 机器人问答日志
+
+企微问答按回答日期保存在 `logs/chat/YYYY-MM-DD.log`，新记录由 `config/chat-log-template.json` 渲染。模板每次同步重新读取，必须保留 `answerId` 用于去重；修改模板不会改写已有日志。通知器每轮自动同步；需要立即补同步时运行：
+
+```bash
+python -m src.io
+```
+
+同步异常写入 `logs/intranet-notify/YYYY-MM-DD.log` 的 `stage: chat-log`，不影响原有内网告警和推送。

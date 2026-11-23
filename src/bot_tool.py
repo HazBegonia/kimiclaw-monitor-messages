@@ -39,16 +39,21 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from dotenv import load_dotenv
+
 from src.wecom_bot_client import make_client_from_secrets
 
+load_dotenv(Path(__file__).with_name(".env"))
 TIME_ZONE = ZoneInfo("Asia/Shanghai")
 
 DEFAULT_CONFIG_PATH = Path("config/notifier.json")
 DEFAULT_STATE_PATH = Path("state/bot-tool-state.json")
 
-CLI_TIMEOUT_SECONDS = 60.0   # per `openclaw config set` invocation
-RESTORE_GRACE_SECONDS = 3.0  # dueAt headroom so an in-flight push restores first
-BACKOFF_TABLE_SECONDS = (5.0, 30.0, 300.0)  # 5s -> 30s -> 5m cap
+CLI_TIMEOUT_SECONDS = float(os.getenv("CLI_TIMEOUT_SECONDS", "60.0"))
+RESTORE_GRACE_SECONDS = float(os.getenv("RESTORE_GRACE_SECONDS", "3.0"))
+BACKOFF_TABLE_SECONDS = tuple(
+    float(value.strip()) for value in os.getenv("BACKOFF_TABLE_SECONDS", "5.0,30.0,300.0").split(",")
+)
 
 
 class BotToolError(Exception):

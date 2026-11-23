@@ -1,0 +1,9 @@
+{
+  "questionTime": "{{questionTime}}",
+  "answerTime": "{{answerTime}}",
+  "sessionId": "{{sessionId}}",
+  "questionId": "{{questionId}}",
+  "answerId": "{{answerId}}",
+  "question": "{{question}}",
+  "answer": "{{answer}}"
+}

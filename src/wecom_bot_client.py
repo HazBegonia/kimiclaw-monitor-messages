@@ -1,40 +1,23 @@
-"""WeCom smart-bot long-connection client (proactive push only, v1 on-demand).
-
-Implements the four protocol frames from the official @wecom/aibot-node-sdk
-(MIT, shipped with the OpenClaw plugin on this machine):
-
-  auth : {cmd:"aibot_subscribe", headers:{req_id}, body:{bot_id, secret}}
-  ack  : {headers:{req_id}, errcode:0, errmsg:"ok"}   (echoes req_id)
-  push : {cmd:"aibot_send_msg", headers:{req_id},
-          body:{chatid, msgtype:"markdown", markdown:{content}}}
-  kick : {cmd:"aibot_event_callback", body:{event:{eventtype:"disconnected_event"}}}
-
-Lifecycle is *on-demand*: connect -> auth -> send -> ack -> close. No
-heartbeat, no background thread, no reconnect loop (a future change may add a
-resident connection for @FF command reception; this class stays the transport).
-
-Connection exclusivity (same botId, one live connection at a time) is handled
-above this class by `src/bot_tool.py` (change share-ff-bot-connection): the
-tool layer time-shares the FF credentials between on-demand pushes here and
-Claw's resident wecom plugin — connecting kicks the companion, so the tool
-layer revives it (config hot-reload) right after disconnecting.
-"""
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable
 
-WS_URL = "wss://openws.work.weixin.qq.com"
+from dotenv import load_dotenv
 
-# Protocol identifiers (must match the official SDK exactly)
-CMD_SUBSCRIBE = "aibot_subscribe"
-CMD_PING = "ping"
-CMD_SEND_MSG = "aibot_send_msg"
-CMD_CALLBACK = "aibot_msg_callback"
-CMD_EVENT_CALLBACK = "aibot_event_callback"
-EVENT_DISCONNECTED = "disconnected_event"
+load_dotenv(Path(__file__).with_name(".env"))
+WS_URL = os.getenv("WS_URL", "wss://openws.work.weixin.qq.com")
+
+CMD_SUBSCRIBE = os.getenv("CMD_SUBSCRIBE", "aibot_subscribe")
+CMD_PING = os.getenv("CMD_PING", "ping")
+CMD_SEND_MSG = os.getenv("CMD_SEND_MSG", "aibot_send_msg")
+CMD_CALLBACK = os.getenv("CMD_CALLBACK", "aibot_msg_callback")
+CMD_EVENT_CALLBACK = os.getenv("CMD_EVENT_CALLBACK", "aibot_event_callback")
+EVENT_DISCONNECTED = os.getenv("EVENT_DISCONNECTED", "disconnected_event")
 
 
 class WecomBotError(Exception):

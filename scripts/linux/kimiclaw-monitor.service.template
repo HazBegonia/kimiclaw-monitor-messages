@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=@REPO_DIR@
-ExecStart=@PYTHON@ -m src.intranet_filename_monitor --interval 10 --timeout 10
+ExecStart=@PYTHON@ -m src.intranet_filename_monitor
 Restart=always
 RestartSec=11
 Environment=PYTHONUNBUFFERED=1

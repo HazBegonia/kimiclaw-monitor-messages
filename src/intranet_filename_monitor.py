@@ -1,6 +1,5 @@
-"""Resident polling monitor for configurable fields in an intranet HTML page."""
 from __future__ import annotations
-import argparse, fnmatch, hashlib, json, os, re, sys, time, uuid
+import argparse, fnmatch, hashlib, json, os, re, time, uuid
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -9,11 +8,19 @@ from urllib.parse import unquote, urljoin, urlsplit
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-DEFAULT_URL="http://172.16.30.20:8011/"; DEFAULT_INTERVAL=5.0; DEFAULT_TIMEOUT=10.0; TIME_ZONE=ZoneInfo("Asia/Shanghai")
-DEFAULT_ERROR_LOG_DIR = Path("logs/intranet-error")
-ERROR_LOG_RETENTION_DAYS = 30
-ERROR_LOG_MAX_BYTES = 100 * 1024 * 1024
-RESIDENT_LOCK_PATH = Path("state/monitor-resident.lock")
+from dotenv import load_dotenv
+
+from src.io import Output
+
+load_dotenv(Path(__file__).with_name(".env"))
+DEFAULT_URL = os.getenv("DEFAULT_URL", "http://172.16.30.20:8011/")
+DEFAULT_INTERVAL = float(os.getenv("DEFAULT_INTERVAL", "10.0"))
+DEFAULT_TIMEOUT = float(os.getenv("DEFAULT_TIMEOUT", "10.0"))
+TIME_ZONE = ZoneInfo(os.getenv("TIME_ZONE", "Asia/Shanghai"))
+DEFAULT_ERROR_LOG_DIR = Path(os.getenv("DEFAULT_ERROR_LOG_DIR", "logs/intranet-error"))
+ERROR_LOG_RETENTION_DAYS = int(os.getenv("ERROR_LOG_RETENTION_DAYS", "30"))
+ERROR_LOG_MAX_BYTES = int(os.getenv("ERROR_LOG_MAX_BYTES", str(100 * 1024 * 1024)))
+RESIDENT_LOCK_PATH = Path(os.getenv("RESIDENT_LOCK_PATH", "state/monitor-resident.lock"))
 
 class PageValidationError(RuntimeError):
     """Raised when a fetched page is not a valid directory listing."""
@@ -160,14 +167,11 @@ def record_error(error_log_dir: Path, *, monitor_id: str, mode: str, phase: str,
     if written_paths:
         record["writtenPaths"] = [_redact(item, 300) for item in written_paths]
     try:
-        error_log_dir.mkdir(parents=True, exist_ok=True)
-        target = error_log_dir / f"{dt.strftime('%Y-%m-%d')}.log"
-        with target.open("a", encoding="utf-8", newline="\n") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        target = Output.write_jsonl(error_log_dir, record, now=dt, time_field=None)
         _cleanup_error_logs(error_log_dir, dt, target)
         return record
     except Exception as log_error:
-        print(f"scan error ({phase}): {_redact(error)}; error log unavailable: {_redact(log_error)}", file=sys.stderr, flush=True)
+        Output.emit_text(f"scan error ({phase}): {_redact(error)}; error log unavailable: {_redact(log_error)}", error=True)
         return None
 
 def _write_state(path: Path, snapshot: dict[str,object], checked_at: datetime, version_files: dict[str, list[str]] | None = None):
@@ -397,47 +401,77 @@ def run_once(url,state_path,log_dir,timeout,*,monitor_id="intranet-root",min_lin
         raise
 
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--url"); p.add_argument("--interval",type=float,default=DEFAULT_INTERVAL); p.add_argument("--timeout",type=float,default=DEFAULT_TIMEOUT); p.add_argument("--confirm-polls",type=int,default=1); p.add_argument("--state",type=Path,default=None); p.add_argument("--log-dir",type=Path,default=Path("logs/intranet-diff")); p.add_argument("--focus-log-dir",type=Path,default=Path("logs/intranet-focus")); p.add_argument("--error-log-dir",type=Path,default=DEFAULT_ERROR_LOG_DIR); p.add_argument("--versions-config",type=Path,default=Path("config/intranet-versions.json")); p.add_argument("--monitors-config",type=Path,default=Path("config/monitors.json")); p.add_argument("--profile",type=Path,help="JSON field profile"); p.add_argument("--once",action="store_true"); a=p.parse_args(argv)
-    if a.interval<=0 or a.timeout<=0 or a.confirm_polls<=0:print("--interval, --timeout and --confirm-polls must be positive",file=sys.stderr); return 2
-    exit_code=0; mode="once" if a.once else "resident"
-    lock_owner = None if a.once else acquire_resident_lock(RESIDENT_LOCK_PATH, a.interval)
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--url")
+    p.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
+    p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    p.add_argument("--confirm-polls", type=int, default=1)
+    p.add_argument("--state", type=Path, default=None)
+    p.add_argument("--log-dir", type=Path, default=Path("logs/intranet-diff"))
+    p.add_argument("--focus-log-dir", type=Path, default=Path("logs/intranet-focus"))
+    p.add_argument("--error-log-dir", type=Path, default=DEFAULT_ERROR_LOG_DIR)
+    p.add_argument("--versions-config", type=Path, default=Path("config/intranet-versions.json"))
+    p.add_argument("--monitors-config", type=Path, default=Path("config/monitors.json"))
+    p.add_argument("--profile", type=Path, help="JSON field profile")
+    p.add_argument("--once", action="store_true")
+    a = p.parse_args(argv)
+    if a.interval <= 0 or a.timeout <= 0 or a.confirm_polls <= 0:
+        Output.emit_text("--interval, --timeout and --confirm-polls must be positive", error=True)
+        return 2
+    exit_code = 0
+    mode = "once" if a.once else "resident"
+    lock_path = RESIDENT_LOCK_PATH
+    lock_owner = None if a.once else acquire_resident_lock(lock_path, a.interval)
     if not a.once and lock_owner is None:
         return 0
     try:
         while True:
             try:
-                config_path=None
+                config_path = None
                 try:
                     if a.url:
-                        targets=[{"id":"intranet-root","url":a.url,"profile":None}]
+                        targets = [{"id": "intranet-root", "url": a.url, "profile": None}]
                     else:
-                        config_path=a.monitors_config; targets=load_monitors_config(a.monitors_config)
+                        config_path = a.monitors_config
+                        targets = load_monitors_config(a.monitors_config)
                     if a.once and not targets:
                         raise ValueError("monitors config requires a non-empty targets array")
-                    if a.profile: config_path=a.profile; profile=json.loads(a.profile.read_text(encoding="utf-8-sig"))
-                    else: profile=None
-                    if a.state and len(targets)>1: config_path=a.state; raise ValueError("--state only supports a single target")
-                    config_path=a.versions_config; versions=load_selected_versions(a.versions_config)
+                    if a.profile:
+                        config_path = a.profile
+                        profile = json.loads(a.profile.read_text(encoding="utf-8-sig"))
+                    else:
+                        profile = None
+                    if a.state and len(targets) > 1:
+                        config_path = a.state
+                        raise ValueError("--state only supports a single target")
+                    config_path = a.versions_config
+                    versions = load_selected_versions(a.versions_config)
                 except Exception as e:
                     record_error(a.error_log_dir, monitor_id="intranet-root", mode=mode, phase="read_config", error=e, path=config_path, state_preserved=False)
                     raise
                 for target in targets:
-                    state_path=a.state or Path("state")/f"intranet-files-{target['id']}.json"
+                    state_path = a.state or Path("state") / f"intranet-files-{target['id']}.json"
                     try:
-                        r=run_once(target["url"],state_path,a.log_dir,a.timeout,monitor_id=target["id"],profile=target.get("profile") or profile,confirm_polls=a.confirm_polls,selected_versions=versions,focus_log_dir=a.focus_log_dir,error_log_dir=a.error_log_dir,mode=mode)
-                        if r["baseline"]:print(f"baseline saved [{target['id']}]: {r['count']} files",flush=True)
-                        elif r["log"]:print(f"diff [{target['id']}]: {r['log']}",flush=True)
+                        r = run_once(target["url"], state_path, a.log_dir, a.timeout, monitor_id=target["id"], profile=target.get("profile") or profile, confirm_polls=a.confirm_polls, selected_versions=versions, focus_log_dir=a.focus_log_dir, error_log_dir=a.error_log_dir, mode=mode)
+                        if r["baseline"]:
+                            Output.emit_text(f"baseline saved [{target['id']}]: {r['count']} files")
+                        elif r["log"]:
+                            Output.emit_text(f"diff [{target['id']}]: {r['log']}")
                     except Exception as e:
-                        print(f"scan failed [{target['id']}]: {e}",file=sys.stderr,flush=True)
-                        exit_code=1
+                        Output.emit_text(f"scan failed [{target['id']}]: {e}", error=True)
+                        exit_code = 1
             except Exception as e:
-                print(f"scan failed: {e}",file=sys.stderr,flush=True)
-                exit_code=1
-            if a.once:return exit_code
-            if not refresh_resident_lock(RESIDENT_LOCK_PATH, lock_owner):
+                Output.emit_text(f"scan failed: {e}", error=True)
+                exit_code = 1
+            if a.once:
+                return exit_code
+            if not refresh_resident_lock(lock_path, lock_owner):
                 return 1
             time.sleep(a.interval)
     finally:
         if lock_owner:
-            release_resident_lock(RESIDENT_LOCK_PATH, lock_owner)
-if __name__=="__main__":raise SystemExit(main())
+            release_resident_lock(lock_path, lock_owner)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

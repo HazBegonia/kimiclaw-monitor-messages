@@ -1,38 +1,3 @@
-"""Deterministic importance rules engine for the intranet notifier.
-
-The engine reads `config/triage-rules.json` every round (hot reload: edits take
-effect on the next round without restarting), validates it, and evaluates
-structured facts (diff / error) into push decisions. No LLM anywhere.
-
-Rule file self-healing (design D5): when the rules file is missing, un-parseable
-or schema-invalid, the engine keeps using the last successfully loaded rules and
-emits a `RulesFileCorrupt` self-error fact. The default rules (and the shipped
-config, which lists `read_rules` in push.errors.phases) match that fact, so the
-group receives a "rule file corrupt" alert instead of silent failure. With no
-last-good at all (first ever run), built-in defaults are used — a minimal
-self-heal set whose only job is to classify the self-error fact as important;
-business defaults live solely in the shipped config file, not in this module.
-
-Precedence for error facts (mirrors the importance rules):
-  1. errorType in push.errors.errorTypes OR phase in push.errors.phases
-     -> IMPORTANT (monitor-self errors are never suppressed as jitter)
-  2. suppress.isolatedRetryableError and retryable and statePreserved
-     -> jitter: NOT important, UNLESS this (monitorId, phase) hit the
-        repeatEscalation window & threshold -> IMPORTANT
-  3. otherwise -> unmatched.error (default "silent" -> not important)
-
-Diff filename filtering runs BEFORE judging, suppression first then inclusion:
-names matching any `suppress.filenamePatterns` fnmatch pattern are removed from
-added/removed; then, when `push.diff.filenameIncludePatterns` is non-empty,
-names NOT matching any include pattern are removed as well. A diff whose lists
-both become empty is NOT important. The notifier filters facts through
-`filter_diff_fact` before rendering so pushed bodies never list filtered names
-(the body notes the combined filtered count).
-
-Unknown-field rejection: any key outside the agreed schema makes the rules
-file corrupt (self-heal + group alert), so a field cannot LOOK configurable
-while doing nothing.
-"""
 from __future__ import annotations
 
 import fnmatch
@@ -43,10 +8,6 @@ from typing import Any, Optional
 
 RULES_FILENAME = "config/triage-rules.json"
 
-# Built-in defaults used only when no last-good rules exist yet. Minimal
-# self-heal set: its only job is to judge the RulesFileCorrupt self-error fact
-# important so the group gets alerted. Business defaults live solely in the
-# shipped config/triage-rules.json — keep this set free of business semantics.
 DEFAULT_RULES: dict[str, Any] = {
     "push": {
         "diff": {"added": False, "removed": False},

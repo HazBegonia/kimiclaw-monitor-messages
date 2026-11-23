@@ -6,14 +6,16 @@ from pathlib import Path
 import pytest
 
 from src.intranet_filename_monitor import acquire_resident_lock, release_resident_lock
-from src.intranet_notifier import (MARKDOWN_LIMIT_BYTES, SECTION_LIMIT, collect, empty_cursor,
-    load_config, load_cursor, parse_diff_log, render_markdown, run_round, save_cursor,
-    write_notify_log)
+from src.intranet_notifier import (collect, empty_cursor, load_config, load_cursor, parse_diff_log,
+    run_round, save_cursor, write_notify_log)
+from src.io import MARKDOWN_LIMIT_BYTES, SECTION_LIMIT, IntranetOutput
 
 
 # ---------------------------------------------------------------- helpers
 
 def make_cfg(tmp_path: Path, *, chatid="chat-1") -> dict:
+    template_file = tmp_path / "notify-template.json"
+    template_file.write_text(Path("config/notify-template.json").read_text(encoding="utf-8"), encoding="utf-8")
     return {
         "chatid": chatid,
         "secretsFile": str(tmp_path / "secrets.json"),
@@ -23,6 +25,7 @@ def make_cfg(tmp_path: Path, *, chatid="chat-1") -> dict:
         "notifyLogDir": str(tmp_path / "notify"),
         "stateFile": str(tmp_path / "state.json"),
         "rulesFile": str(tmp_path / "rules.json"),
+        "templateFile": str(template_file),
         "lockFile": str(tmp_path / "notifier.lock"),
         "sourceUrl": "http://example.test/",
         "timeouts": {"connect": 1, "ack": 1},
@@ -159,9 +162,10 @@ def test_parse_diff_both_formats(tmp_path):
 
 def test_render_template_shape(tmp_path):
     cfg = make_cfg(tmp_path)
+    output = IntranetOutput.from_file(Path(cfg["templateFile"]))
     diffs = [{"monitorId": "intranet-root", "detectedAt": "2026-09-18T09:30:00+08:00", "added": ["a.csv", "b.csv"], "removed": []}]
     errors = [{"detectedAt": "2026-09-18T09:31:00+08:00", "phase": "fetch_page", "errorType": "TimeoutError", "message": "x" * 300}]
-    body = render_markdown(diffs, errors, cfg["sourceUrl"])
+    body = output.render(diffs, errors, cfg["sourceUrl"])
     assert "**内网监控告警** 2026-09-18 09:31" in body
     assert "> 来源: http://example.test/" in body
     assert "【新增文件 2 个】" in body and "- `a.csv`" in body
@@ -172,19 +176,50 @@ def test_render_template_shape(tmp_path):
             assert len(line) <= 80
 
 
-def test_render_section_truncation_and_dedupe():
+def test_render_section_truncation_and_dedupe(tmp_path):
+    cfg = make_cfg(tmp_path)
+    output = IntranetOutput.from_file(Path(cfg["templateFile"]))
     added = [f"file_{i:03d}.csv" for i in range(20)]
     diffs = [{"monitorId": "m", "detectedAt": "2026-09-18T09:00:00+08:00", "added": added, "removed": []}]
-    body = render_markdown(diffs, [], "http://x/")
+    body = output.render(diffs, [], "http://x/")
     assert body.count("- `") <= SECTION_LIMIT
     assert "共 20 个" in body
 
 
 def test_render_byte_cap(tmp_path):
+    cfg = make_cfg(tmp_path)
+    output = IntranetOutput.from_file(Path(cfg["templateFile"]))
     added = [f"very_long_filename_{i:04d}_with_padding.csv" for i in range(500)]
     diffs = [{"monitorId": "m", "detectedAt": "2026-09-18T09:00:00+08:00", "added": added, "removed": []}]
-    body = render_markdown(diffs, [], "http://x/")
+    body = output.render(diffs, [], "http://x/")
     assert len(body.encode("utf-8")) <= MARKDOWN_LIMIT_BYTES
+
+
+def test_custom_template_controls_content_and_order(tmp_path):
+    cfg = make_cfg(tmp_path)
+    output = IntranetOutput.from_file(Path(cfg["templateFile"]))
+    template = output.template
+    template["header"] = "自定义告警 {{timestamp}}"
+    template["source"] = ""
+    template["sections"] = [template["sections"][2], template["sections"][0]]
+    template["sections"][1]["title"] = "文件数={{count}}"
+    template["sections"][1]["item"] = "+ {{item}}"
+    diffs = [{"detectedAt": "2026-09-18T09:30:00+08:00", "added": ["a.csv"], "removed": []}]
+    errors = [{"detectedAt": "2026-09-18T09:31:00+08:00", "phase": "fetch", "errorType": "Timeout", "message": "slow"}]
+    body = output.render(diffs, errors, cfg["sourceUrl"])
+    assert body.index("【监控错误 1 条】") < body.index("文件数=1")
+    assert "+ a.csv" in body
+    assert "来源" not in body and "**内网监控告警**" not in body
+
+
+def test_template_rejects_unknown_placeholder(tmp_path):
+    cfg = make_cfg(tmp_path)
+    template_path = Path(cfg["templateFile"])
+    template = json.loads(template_path.read_text(encoding="utf-8"))
+    template["header"] = "{{unknown}}"
+    template_path.write_text(json.dumps(template), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported placeholder"):
+        IntranetOutput.from_file(template_path)
 
 
 # ---------------------------------------------------------------- loop
@@ -351,3 +386,34 @@ def test_fully_suppressed_diff_stays_silent(tmp_path):
     assert push.calls == []
     # cursor still advanced past the suppressed artifact
     assert load_cursor(Path(cfg["stateFile"]))["diffCursor"] == "2026-09-18_10-00-00-000.log"
+
+
+def test_missing_errors_section_omits_error_details(tmp_path):
+    cfg = make_cfg(tmp_path)
+    engine = build_engine(tmp_path, cfg)
+    template_path = Path(cfg["templateFile"])
+    template = json.loads(template_path.read_text(encoding="utf-8"))
+    template["sections"] = [s for s in template["sections"] if s["type"] != "errors"]
+    template_path.write_text(json.dumps(template, ensure_ascii=False), encoding="utf-8")
+    write_error(cfg, "2026-09-18", [err_fact(errorType="PageValidationError")])
+    push = FakePush([("ok", None)])
+    out = run_round(cfg, engine, empty_cursor(), push=push)
+    assert out.action == "sent"
+    assert "监控错误" not in push.calls[0]
+    assert "PageValidationError" not in push.calls[0]
+
+
+def test_template_is_reread_for_each_notification(tmp_path):
+    cfg = make_cfg(tmp_path)
+    engine = build_engine(tmp_path, cfg)
+    write_diff(cfg, "2026-09-18_10-00-00-000.log", added=["a.csv"])
+    push = FakePush([("ok", None), ("ok", None)])
+    run_round(cfg, engine, empty_cursor(), push=push)
+
+    template_path = Path(cfg["templateFile"])
+    template = json.loads(template_path.read_text(encoding="utf-8"))
+    template["header"] = "更新后的告警 {{timestamp}}"
+    template_path.write_text(json.dumps(template, ensure_ascii=False), encoding="utf-8")
+    write_diff(cfg, "2026-09-18_11-00-00-000.log", added=["b.csv"])
+    run_round(cfg, engine, load_cursor(Path(cfg["stateFile"])), push=push)
+    assert push.calls[1].startswith("更新后的告警")

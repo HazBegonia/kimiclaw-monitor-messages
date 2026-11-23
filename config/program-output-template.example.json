@@ -1,0 +1,15 @@
+{
+  "separator": "\n",
+  "statusHeader": "**脚本运行状态**",
+  "statusRegistered": "注册脚本：{{registered}}",
+  "statusRunning": "正在运行 {{count}} 个：",
+  "statusItem": "- `{{script}}`：PID `{{pid}}`",
+  "statusEmpty": "当前没有脚本在运行。",
+  "started": "**启动成功**\n脚本：`{{script}}`\nPID：`{{pid}}`",
+  "alreadyRunning": "**无需重复启动**\n脚本：`{{script}}`\n已在运行的 PID：`{{pids}}`",
+  "output": "执行输出：\n```text\n{{output}}\n```",
+  "stopped": "**停止成功**\n脚本：`{{script}}`\nPID：`{{pids}}`",
+  "notRunning": "{{script}} 当前未运行，无需停止。",
+  "stopTimeout": "{{script}} 已发送停止信号，但进程仍未退出，PID：{{pids}}。",
+  "error": "**操作失败**\n{{error}}"
+}

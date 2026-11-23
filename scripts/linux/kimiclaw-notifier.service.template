@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=@REPO_DIR@
-ExecStart=@PYTHON@ -m src.intranet_notifier --interval 10
+ExecStart=@PYTHON@ -m src.intranet_notifier
 Restart=always
 RestartSec=11
 Environment=PYTHONUNBUFFERED=1

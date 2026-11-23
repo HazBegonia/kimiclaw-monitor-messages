@@ -1,34 +1,8 @@
-"""Resident deterministic notifier: consume collector artifacts -> rule engine
--> aggregate one markdown -> push via WeCom smart-bot WebSocket client.
-
-Replaces the OpenClaw LLM triage loop with a 0-token deterministic pipeline
-(change: retire-openclaw-py-notifier). The interface with the collector is the
-same log directories + `state/notify-state.json` cursor it already maintains.
-
-Since change share-ff-bot-connection the push goes through the bot tool layer
-(`src/bot_tool.py`): it owns the shared FF connection choreography (connect ->
-send -> disconnect -> revive the Claw companion, failure backoff). This loop
-only calls `bot_tool.push_markdown()` and, each round, the debt-settling
-`bot_tool.ensure_companion_alive()`.
-
-Loop contract (spec py-notifier-loop):
-  - process only artifacts after the push cursor; a missing/corrupt cursor is
-    an EMPTY cursor (process everything from the start, never silently skip)
-  - importance decided purely by config/triage-rules.json (hot-read each round)
-  - one aggregated markdown per round, at most one message
-  - cursor advances ONLY after a successful send (or when nothing important)
-  - send failure -> JSONL record in logs/intranet-notify/, cursor untouched,
-    retried per the tool layer's persisted backoff (at-least-once, never
-    duplicated)
-  - --dry-run renders and prints, never connects, never advances
-  - --once runs a single round and exits nonzero on failure
-  - resident single-instance lock (state/notifier-resident.lock), watchdog-run
-"""
 from __future__ import annotations
 
 import argparse
 import json
-import sys
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -38,12 +12,10 @@ from zoneinfo import ZoneInfo
 from src import bot_tool
 from src.intranet_filename_monitor import (acquire_resident_lock, refresh_resident_lock,
     release_resident_lock)  # reuse verified lock code; collector file stays untouched
+from src.io import ChatLogger, IntranetOutput, Output
 from src.triage_rules import RulesEngine
 
-TIME_ZONE = ZoneInfo("Asia/Shanghai")
-MARKDOWN_LIMIT_BYTES = 20480
-SECTION_LIMIT = 15
-ERROR_LINE_LIMIT = 80
+TIME_ZONE = ZoneInfo(os.getenv("TIME_ZONE", "Asia/Shanghai"))
 
 DEFAULTS: dict[str, Any] = {
     "chatid": "",
@@ -54,6 +26,7 @@ DEFAULTS: dict[str, Any] = {
     "notifyLogDir": "logs/intranet-notify",
     "stateFile": "state/notify-state.json",
     "rulesFile": "config/triage-rules.json",
+    "templateFile": "config/notify-template.json",
     "lockFile": "state/notifier-resident.lock",
     "botToolStateFile": "state/bot-tool-state.json",
     "sourceUrl": "",
@@ -92,7 +65,7 @@ def load_config(path: Path) -> dict[str, Any]:
             cfg["timeouts"] = {**DEFAULTS["timeouts"], **data["timeouts"]}
     if not str(cfg.get("chatid") or "").strip():
         raise ValueError("config.chatid is required (target group)")
-    for key in ("diffLogDir", "errorLogDir", "notifyLogDir", "stateFile", "rulesFile", "lockFile", "secretsFile"):
+    for key in ("diffLogDir", "errorLogDir", "notifyLogDir", "stateFile", "rulesFile", "templateFile", "lockFile", "secretsFile"):
         if not str(cfg.get(key) or "").strip():
             raise ValueError(f"config.{key} is required")
     interval = cfg.get("pollIntervalSeconds")
@@ -251,83 +224,15 @@ def collect(cfg: dict[str, Any], cursor: dict[str, Any]) -> tuple[dict[str, Any]
     return {"diffs": diffs, "errors": errors}, new_cursor
 
 
-# ---------------------------------------------------------------- render
-
-def _error_line(fact: dict[str, Any]) -> str:
-    """One error entry: `<HH:mm> [phase] errorType: message`, truncated so the
-    FINAL rendered line (including the "- " prefix added by the section
-    formatter) stays within ERROR_LINE_LIMIT characters."""
-    max_len = ERROR_LINE_LIMIT - 2  # reserve space for the "- " prefix
-    dt = fact.get("detectedAt")
-    line = ""
-    if dt:
-        try:
-            parsed = datetime.fromisoformat(str(dt).replace("Z", "+00:00"))
-            line = f"{parsed:%H:%M} [{fact.get('phase')}] {fact.get('errorType')}: {fact.get('message')}"
-        except ValueError:
-            pass
-    if not line:
-        line = f"[{fact.get('phase')}] {fact.get('errorType')}: {fact.get('message')}"
-    return line if len(line) <= max_len else line[:max_len]
-
-
-def _fmt_section(title: str, items: list[str], unit: str = "个", tick: bool = False, cap: int = SECTION_LIMIT) -> str:
-    lines = [f"【{title} {len(items)} {unit}】"]
-    for item in items[:cap]:
-        lines.append(f"- `{item}`" if tick else f"- {item}")
-    if len(items) > cap:
-        lines.append(f"…另有 {len(items) - cap} 个，共 {len(items)} 个")
-    return "\n".join(lines)
-
-
-def render_markdown(important_diffs: list[dict[str, Any]], important_errors: list[dict[str, Any]], source_url: str) -> str:
-    """Aggregate one round's important facts into the existing markdown template,
-    staying under the 20480 UTF-8 byte cap (sections shrink when needed)."""
-    timestamp = ""
-    all_detected = [f.get("detectedAt") for f in important_diffs + important_errors if f.get("detectedAt")]
-    if all_detected:
-        newest = str(max(all_detected))
-        try:
-            timestamp = datetime.fromisoformat(newest.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
-        except ValueError:
-            timestamp = newest
-
-    added = sorted({name for f in important_diffs for name in f.get("added", [])})
-    removed = sorted({name for f in important_diffs for name in f.get("removed", [])})
-    suppressed = sum(int(f.get("suppressedFilenames") or 0) for f in important_diffs)
-    error_lines = [_error_line(f) for f in important_errors]
-
-    def build(cap: int) -> str:
-        parts = [f"**内网监控告警** {timestamp}" + (f"\n> 来源: {source_url}" if source_url else "")]
-        if added:
-            parts.append(_fmt_section("新增文件", added, tick=True, cap=cap))
-        if removed:
-            parts.append(_fmt_section("删除文件", removed, tick=True, cap=cap))
-        if error_lines:
-            parts.append(_fmt_section("监控错误", error_lines, unit="条", cap=cap))
-        if suppressed:
-            parts.append(f"已按规则忽略 {suppressed} 个匹配文件名")
-        return "\n".join(parts)
-
-    for cap in (SECTION_LIMIT, 12, 10, 8, 6, 4, 3, 2, 1):
-        body = build(cap)
-        if len(body.encode("utf-8")) <= MARKDOWN_LIMIT_BYTES:
-            return body
-    body = build(0) + "\n…（正文超长，已截断）"
-    if len(body.encode("utf-8")) > MARKDOWN_LIMIT_BYTES:
-        body = body.encode("utf-8")[:MARKDOWN_LIMIT_BYTES].decode("utf-8", errors="ignore") + "\n…（正文超长，已截断）"
-    return body
-
-
 # ---------------------------------------------------------------- notify log
 
 def write_notify_log(cfg: dict[str, Any], stage: str, fields: dict[str, Any]) -> None:
-    log_dir = Path(str(cfg["notifyLogDir"]))
-    log_dir.mkdir(parents=True, exist_ok=True)
-    record = {"detectedAt": _now().isoformat(), "stage": stage, **fields}
-    target = log_dir / f"{_now():%Y-%m-%d}.log"
-    with target.open("a", encoding="utf-8", newline="\n") as fh:
-        fh.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    Output.write_jsonl(
+        Path(str(cfg["notifyLogDir"])),
+        {"stage": stage, **fields},
+        now=_now(),
+        time_field="detectedAt",
+    )
 
 
 # ---------------------------------------------------------------- round
@@ -379,7 +284,9 @@ def run_round(
         save_cursor(Path(str(cfg["stateFile"])), end_cursor)  # silent advance: nothing worth pushing
         return outcome
 
-    content = render_markdown(important_diffs, important_errors, str(cfg.get("sourceUrl") or ""))
+    content = IntranetOutput.from_file(Path(str(cfg["templateFile"]))).render(
+        important_diffs, important_errors, str(cfg.get("sourceUrl") or "")
+    )
     outcome.message = content
     if dry_run or push is None:
         outcome.action = "dry-run"
@@ -428,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
     except (OSError, ValueError, json.JSONDecodeError) as e:
-        print(f"notifier config error: {e}", file=sys.stderr)
+        Output.emit_text(f"notifier config error: {e}", error=True)
         return 2
 
     engine = RulesEngine(Path(str(cfg["rulesFile"])))
@@ -436,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     resident = not args.once and not args.dry_run
     lock_owner = None if not resident else acquire_resident_lock(Path(str(cfg["lockFile"])), interval)
     if lock_owner is None and resident:
-        print("another notifier instance holds the lock; exiting silently", flush=True)
+        Output.emit_text("another notifier instance holds the lock; exiting silently")
         return 0
 
     try:
@@ -444,6 +351,12 @@ def main(argv: list[str] | None = None) -> int:
             # settle any unpaid companion-restore debt first (crash insurance);
             # dry-run must stay side-effect free
             if not args.dry_run:
+                try:
+                    added = ChatLogger().sync()
+                    if added:
+                        Output.emit_text(f"chat log: added {added} record(s)")
+                except Exception as e:
+                    write_notify_log(cfg, "chat-log", {"error": f"{type(e).__name__}: {e}"})
                 try:
                     bot_tool.ensure_companion_alive(state_path=Path(str(cfg["botToolStateFile"])))
                 except Exception as e:
@@ -455,23 +368,23 @@ def main(argv: list[str] | None = None) -> int:
                 outcome = RoundOutcome("failed", error=f"{type(e).__name__}: {e}")
                 write_notify_log(cfg, "wecom-send", {"error": outcome.error, "contentDigest": "", "pendingDiff": -1, "pendingErrors": -1})
             if outcome.action == "failed":
-                print(f"notifier round failed: {outcome.error}", file=sys.stderr, flush=True)
+                Output.emit_text(f"notifier round failed: {outcome.error}", error=True)
                 if args.once:
                     return 1
             elif args.dry_run:
-                print("\n--- dry-run: would send the following markdown ---\n", flush=True)
-                print(outcome.message or "(no important facts)", flush=True)
-                print("\n--- end dry-run (nothing sent, cursor not advanced) ---", flush=True)
+                Output.emit_text("\n--- dry-run: would send the following markdown ---\n")
+                Output.emit_text(outcome.message or "(no important facts)")
+                Output.emit_text("\n--- end dry-run (nothing sent, cursor not advanced) ---")
                 if args.once:
                     return 0
             else:
-                print(f"notifier round: action={outcome.action} diffs={outcome.diffs} errors={outcome.errors}", flush=True)
+                Output.emit_text(f"notifier round: action={outcome.action} diffs={outcome.diffs} errors={outcome.errors}")
                 if args.once:
                     return 0
             if not resident:
                 return 0
             if not refresh_resident_lock(Path(str(cfg["lockFile"])), lock_owner):
-                print("resident lock lost; exiting", file=sys.stderr, flush=True)
+                Output.emit_text("resident lock lost; exiting", error=True)
                 return 1
             time.sleep(interval)
     finally:

@@ -1,0 +1,29 @@
+{
+  "header": "{{timestamp}}",
+  "source": "> 来源: {{sourceUrl}}",
+  "errorWithTime": "{{time}} [{{phase}}] {{errorType}}: {{message}}",
+  "errorWithoutTime": "[{{phase}}] {{errorType}}: {{message}}",
+  "separator": "\n",
+  "sections": [
+    {
+      "type": "added",
+      "title": "【新增文件 {{count}} 个】",
+      "item": "- `{{item}}`",
+      "overflow": "…另有 {{omitted}} 个，共 {{count}} 个"
+    },
+    {
+      "type": "removed",
+      "title": "【删除文件 {{count}} 个】",
+      "item": "- `{{item}}`",
+      "overflow": "…另有 {{omitted}} 个，共 {{count}} 个"
+    },
+    {
+      "type": "errors",
+      "title": "【监控错误 {{count}} 条】",
+      "item": "- {{item}}",
+      "overflow": "…另有 {{omitted}} 条，共 {{count}} 条"
+    }
+  ],
+  "suppressed": "已按规则忽略 {{count}} 个匹配文件名",
+  "truncated": "…（正文超长，已截断）"
+}

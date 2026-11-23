@@ -45,14 +45,14 @@ python -m src.intranet_notifier --once --dry-run
 
 ## 4. 配置速查(JSON 热读,.env 重启生效)
 
-| 文件                            | 内容                                                                                                    | 生效方式                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `config/monitors.json`          | 监控目标(URL、id)                                                                                       | 下一轮扫描生效                                                    |
-| `config/intranet-versions.json` | 版本选择清单                                                                                            | 下一轮扫描生效(空数组=停用版本快照)                               |
-| `config/triage-rules.json`      | 重要性规则(diff/error/抖动抑制/升级窗口/文件名抑制 filenamePatterns/文件名关注 filenameIncludePatterns) | 通知器热读,下一轮生效;坏文件或含未知字段自动回退 last-good 并告警 |
-| `config/notifier.json`          | chatid、目录、游标文件、secrets 路径、模板路径、超时                                                    | 通知器配置                                                        |
-| `config/notify-template.json`   | 推送标题、来源、区块内容与顺序、错误摘要、截断提示                                                      | 有消息要发送时热读,下一次通知生效                                 |
-| `src/.env`                      | DEFAULT_URL、DEFAULT_INTERVAL、DEFAULT_TIMEOUT、时区、日志与锁路径、渲染限制                            | 模块加载时读取,修改后重启对应服务                                 |
+| 文件                             | 内容                                                                                                    | 生效方式                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `config/monitors.json`           | 监控目标(URL、id)                                                                                       | 下一轮扫描生效                                                    |
+| `config/intranet-versions.json`  | 版本选择清单                                                                                            | 下一轮扫描生效(空数组=停用版本快照)                               |
+| `config/triage-rules.json`       | 重要性规则(diff/error/抖动抑制/升级窗口/文件名抑制 filenamePatterns/文件名关注 filenameIncludePatterns) | 通知器热读,下一轮生效;坏文件或含未知字段自动回退 last-good 并告警 |
+| `config/notifier.json`           | chatid、目录、游标文件、secrets 路径、模板路径、超时                                                    | 通知器配置                                                        |
+| `templates/notify-template.json` | 推送标题、来源、区块内容与顺序、错误摘要、截断提示                                                      | 有消息要发送时热读,下一次通知生效                                 |
+| `src/.env`                       | DEFAULT_URL、DEFAULT_INTERVAL、DEFAULT_TIMEOUT、时区、日志与锁路径、渲染限制                            | 模块加载时读取,修改后重启对应服务                                 |
 
 代码通过 `python-dotenv` 直接读取 `src/.env` 中的常量,系统环境变量优先。模板的 `sections` 数组决定输出哪些区块及其顺序;删除整个区块即不输出该内容,区块字段和占位符由 `IntranetOutput` 严格校验。内网告警和程序管理共用 `Output` 基类进行模板操作、JSONL 日志写入和终端输出。
 
@@ -111,7 +111,7 @@ tail -f logs/program-control/$(date +%F).log
 
 ## 8. 机器人问答日志
 
-企微问答按回答日期保存在 `logs/chat/YYYY-MM-DD.log`，新记录由 `config/chat-log-template.json` 渲染。模板每次同步重新读取，必须保留 `answerId` 用于去重；修改模板不会改写已有日志。通知器每轮自动同步；需要立即补同步时运行：
+企微问答按回答日期保存在 `logs/chat/YYYY-MM-DD.log`，新记录由 `templates/chat-log-template.json` 渲染。模板每次同步重新读取，必须保留 `answerId` 用于去重；修改模板不会改写已有日志。通知器每轮自动同步；需要立即补同步时运行：
 
 ```bash
 python -m src.io

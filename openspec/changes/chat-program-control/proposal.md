@@ -11,7 +11,7 @@
 - `start` 先检查是否运行，未运行时用 `bash` 后台启动并记录输出；已运行则不重复启动。
 - `stop` 使用相同的进程查询结果停止脚本，未运行时不发送信号。
 - 查询、启动、重复启动和停止写入按日 JSONL 日志；不维护 PID 状态文件。
-- `config/program-output-template.json` 定义统一输出文案，结果中的 `message` 同时用于终端和 Claw 群回复。
+- `templates/program-output-template.json` 定义统一输出文案，结果中的 `message` 同时用于终端和 Claw 群回复。
 - 新增独立 Skill，让 Claw 通过固定 CLI 获取注册清单和操作结果，无需读取 `.env`。
 - 不改变现有内网采集、通知推送和监控配置助手。
 

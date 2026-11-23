@@ -9,7 +9,7 @@
 
 - [x] 2.1 更新独立 Skill，通过 `status.registered` 获取脚本，调用固定 `status/start/stop`，不读取 `.env` 或生成其他执行代码。
 - [x] 2.2 同步 README、部署运维文档、`program/README.md`、AGENTS 和 OpenSpec，删除旧状态文件与复杂实现说明。
-- [x] 2.3 新增 `config/program-output-template.json`，为状态、启动、重复启动、停止、输出和错误生成统一 `message`；终端与 Claw 共用，并测试自定义模板生效。
+- [x] 2.3 新增 `templates/program-output-template.json`，为状态、启动、重复启动、停止、输出和错误生成统一 `message`；终端与 Claw 共用，并测试自定义模板生效。
 
 ## 3. 验收
 

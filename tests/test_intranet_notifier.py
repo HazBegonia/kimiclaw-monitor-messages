@@ -15,7 +15,7 @@ from src.io import MARKDOWN_LIMIT_BYTES, SECTION_LIMIT, IntranetOutput
 
 def make_cfg(tmp_path: Path, *, chatid="chat-1") -> dict:
     template_file = tmp_path / "notify-template.json"
-    template_file.write_text(Path("config/notify-template.json").read_text(encoding="utf-8"), encoding="utf-8")
+    template_file.write_text(Path("templates/notify-template.json").read_text(encoding="utf-8"), encoding="utf-8")
     return {
         "chatid": chatid,
         "secretsFile": str(tmp_path / "secrets.json"),

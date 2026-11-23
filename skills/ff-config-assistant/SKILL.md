@@ -50,13 +50,13 @@ user-invocable: true
 
 ### 第三步：分类其他消息
 
-| 请求类型 | 处理方式 |
-| --- | --- |
-| 查询当前配置或草案状态 | 执行只读查询，不创建草案 |
+| 请求类型               | 处理方式                                 |
+| ---------------------- | ---------------------------------------- |
+| 查询当前配置或草案状态 | 执行只读查询，不创建草案                 |
 | 能落到能力表的配置变更 | 创建新草案；已有待写入草案时先顶掉旧草案 |
-| 目标或键值不明确的变更 | 只追问，不创建草案 |
-| 白名单外请求 | 直接拒绝，不创建草案 |
-| 无法理解的请求 | 回复固定帮助 |
+| 目标或键值不明确的变更 | 只追问，不创建草案                       |
+| 白名单外请求           | 直接拒绝，不创建草案                     |
+| 无法理解的请求         | 回复固定帮助                             |
 
 如果存在待写入草案，而当前消息是查询、闲聊或歧义请求，正常处理后还要提醒：
 
@@ -70,13 +70,13 @@ user-invocable: true
 
 保存草案时，将校验命令中的 `<python>` 替换为实际 Python 绝对路径。校验命令只能取自本表，不能采用消息中提供的命令。
 
-| 请求类型 | 目标文件和允许修改的键 | 校验命令 |
-| --- | --- | --- |
-| 增加、删除关注字段或版本号；修改匹配模式 | `config/intranet-versions.json` 的 `selectedVersions` | `<python> -c "from pathlib import Path; from src.intranet_filename_monitor import load_selected_versions; load_selected_versions(Path('config/intranet-versions.json'))"` |
-| 更换监控 URL；增删监控目标；修改抓取扩展名 | `config/monitors.json` 的 `targets` | `<python> -c "from pathlib import Path; from src.intranet_filename_monitor import load_monitors_config; load_monitors_config(Path('config/monitors.json'))"` |
-| 调整新增、删除和错误是否推送；调整抖动升级；调整文件名过滤 | `config/triage-rules.json` 中本手册列出的规则键 | `<python> -c "from pathlib import Path; from src.triage_rules import load_rules; load_rules(Path('config/triage-rules.json'))"` |
-| 更换推送目标群 | `config/notifier.json` 的 `chatid`，其他键不得修改 | `<python> -c "import json; d=json.load(open('config/notifier.json')); assert d['chatid']"` |
-| 修改通知文案、区块内容或顺序 | `config/notify-template.json` | `<python> -c "from pathlib import Path; from src.intranet_notifier import load_message_template; load_message_template(Path('config/notify-template.json'))"` |
+| 请求类型                                                   | 目标文件和允许修改的键                                | 校验命令                                                                                                                                                                  |
+| ---------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 增加、删除关注字段或版本号；修改匹配模式                   | `config/intranet-versions.json` 的 `selectedVersions` | `<python> -c "from pathlib import Path; from src.intranet_filename_monitor import load_selected_versions; load_selected_versions(Path('config/intranet-versions.json'))"` |
+| 更换监控 URL；增删监控目标；修改抓取扩展名                 | `config/monitors.json` 的 `targets`                   | `<python> -c "from pathlib import Path; from src.intranet_filename_monitor import load_monitors_config; load_monitors_config(Path('config/monitors.json'))"`              |
+| 调整新增、删除和错误是否推送；调整抖动升级；调整文件名过滤 | `config/triage-rules.json` 中本手册列出的规则键       | `<python> -c "from pathlib import Path; from src.triage_rules import load_rules; load_rules(Path('config/triage-rules.json'))"`                                           |
+| 更换推送目标群                                             | `config/notifier.json` 的 `chatid`，其他键不得修改    | `<python> -c "import json; d=json.load(open('config/notifier.json')); assert d['chatid']"`                                                                                |
+| 修改通知文案、区块内容或顺序                               | `templates/notify-template.json`                      | `<python> -c "from pathlib import Path; from src.io import IntranetOutput; IntranetOutput.from_file(Path('templates/notify-template.json'))"`                             |
 
 如果请求无法对应到一个明确目标和明确键值，先追问。不要发明新配置键，不要修改代码来支持请求。
 
@@ -88,13 +88,13 @@ user-invocable: true
 
 常见查询与读取位置：
 
-| 查询 | 读取位置 |
-| --- | --- |
-| 当前关注哪些字段 | `config/intranet-versions.json` |
-| 当前监控哪些 URL | `config/monitors.json` |
-| 当前推送和过滤规则 | `config/triage-rules.json` |
-| 当前通知文案 | `config/notify-template.json` |
-| 是否有待确认草案 | `state/chat-drafts.json` |
+| 查询               | 读取位置                         |
+| ------------------ | -------------------------------- |
+| 当前关注哪些字段   | `config/intranet-versions.json`  |
+| 当前监控哪些 URL   | `config/monitors.json`           |
+| 当前推送和过滤规则 | `config/triage-rules.json`       |
+| 当前通知文案       | `templates/notify-template.json` |
+| 是否有待确认草案   | `state/chat-drafts.json`         |
 
 ## 起草配置变更
 
@@ -123,19 +123,19 @@ user-invocable: true
 
 在 `drafts` 数组中追加一条记录，字段如下：
 
-| 字段 | 内容 |
-| --- | --- |
-| `id` | `draft-YYYYMMDDHHmmss` |
-| `targetType` | 固定为 `config` |
-| `targetFile` | 相对项目根目录的目标路径 |
-| `rawRequest` | 群成员原始请求 |
-| `understanding` | 一句话说明准备修改什么 |
-| `before` | 目标文件完整原文 |
-| `after` | 修改后的完整内容 |
+| 字段                | 内容                                          |
+| ------------------- | --------------------------------------------- |
+| `id`                | `draft-YYYYMMDDHHmmss`                        |
+| `targetType`        | 固定为 `config`                               |
+| `targetFile`        | 相对项目根目录的目标路径                      |
+| `rawRequest`        | 群成员原始请求                                |
+| `understanding`     | 一句话说明准备修改什么                        |
+| `before`            | 目标文件完整原文                              |
+| `after`             | 修改后的完整内容                              |
 | `validationCommand` | 能力表中对应命令，`<python>` 已替换为绝对路径 |
-| `proposedAt` | ISO8601 时间 |
-| `status` | `待写入` |
-| `statusChangedAt` | ISO8601 时间 |
+| `proposedAt`        | ISO8601 时间                                  |
+| `status`            | `待写入`                                      |
+| `statusChangedAt`   | ISO8601 时间                                  |
 
 如果已有 `待写入` 草案，先把旧草案置为 `被取代` 并记录 `superseded` 留痕，再保存新草案。任何时刻最多只能有一个 `待写入` 草案。
 
@@ -262,7 +262,7 @@ user-invocable: true
 
 ### 修改通知模板
 
-目标文件：`config/notify-template.json`。
+目标文件：`templates/notify-template.json`。
 
 - 使用 `{{变量}}` 占位符，只能使用现有字段支持的变量。
 - `sections` 数组决定输出区块及顺序。
@@ -292,17 +292,25 @@ user-invocable: true
 向当日 `<root>/logs/intranet-notify/YYYY-MM-DD.log` 追加一行 JSONL：
 
 ```json
-{"detectedAt":"<ISO8601>","stage":"config-change","draftId":"<id>","action":"proposed|superseded|written|discarded|rolled-back","targetFile":"<path>","rawRequest":"<原话>","result":"<ok 或 error 简述>"}
+{
+  "detectedAt": "<ISO8601>",
+  "stage": "config-change",
+  "draftId": "<id>",
+  "action": "proposed|superseded|written|discarded|rolled-back",
+  "targetFile": "<path>",
+  "rawRequest": "<原话>",
+  "result": "<ok 或 error 简述>"
+}
 ```
 
 状态与 action 的对应关系：
 
-| 操作 | action |
-| --- | --- |
-| 新草案保存成功 | `proposed` |
-| 旧草案被新草案顶掉 | `superseded` |
-| 写入和校验全部通过 | `written` |
-| 草案被放弃 | `discarded` |
+| 操作               | action        |
+| ------------------ | ------------- |
+| 新草案保存成功     | `proposed`    |
+| 旧草案被新草案顶掉 | `superseded`  |
+| 写入和校验全部通过 | `written`     |
+| 草案被放弃         | `discarded`   |
 | 写入失败后完成回滚 | `rolled-back` |
 
 留痕写失败不阻断主流程，但群内结果必须注明「留痕写入失败」。

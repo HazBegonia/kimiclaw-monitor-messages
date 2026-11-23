@@ -13,7 +13,7 @@
                     企业微信智能机器人长连接 ──> 目标群
 
 【需求链路（OpenClaw）】
-群里 @机器人 ──> Claw gateway ──草案协议──> 改写 config/*.json
+群里 @机器人 ──> Claw gateway ──草案协议──> 改写白名单配置
                                                       │
                                                       ▼
                                   采集器/通知器下一轮热读生效
@@ -96,18 +96,27 @@ loginctl enable-linger <用户名>
 
 ## 配置说明
 
-常量值放在 `src/.env`，结构化业务配置放在 `config/*.json`：
+常量值放在 `src/.env`，监控目标、机器人、通知规则和定时配置放在 `config/*.json`：
 
 | 文件                            | 要改什么                                                                                 | 说明                                                                                      |
 | ------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `src/.env`                      | `DEFAULT_URL`、`DEFAULT_INTERVAL`、`DEFAULT_TIMEOUT`、`TIME_ZONE`、日志/锁路径、渲染限制 | 模块加载时读取，修改后重启对应服务                                                        |
 | `config/monitors.json`          | `url` 改成实际内网页面地址                                                               | 监控目标清单；`profile` 描述页面结构（如只认 `.csv` 链接），多目标可加多项                |
 | `config/notifier.json`          | `chatid`、`sourceUrl`、`templateFile`                                                    | 通知器 JSON 配置                                                                          |
-| `config/notify-template.json`   | 标题、来源、区块、列表项和提示文案                                                       | 通知器每次发送前重新读取并填充模板                                                        |
 | `config/intranet-versions.json` | `match` 填关注的版本号/字段                                                              | 命中字段的文件集合变化时额外记版本快照；空数组 `[]` = 停用该功能                          |
 | `config/triage-rules.json`      | 按需调整                                                                                 | 重要性规则：新增/删除文件默认推、错误推送类型、文件名 suppress/include 过滤。默认值即可跑 |
 
 代码通过 `python-dotenv` 直接读取 `src/.env`，再用 `os.getenv()` 取得常量；系统环境变量优先。机器人凭证仍只放在 `state/secrets/wecom-bot.json`，不放进 `.env`。
+
+### IO 输出模板
+
+所有输出模板单独放在 `templates/`，不与业务和运行配置混放：
+
+| 文件                                     | 控制内容                                     |
+| ---------------------------------------- | -------------------------------------------- |
+| `templates/notify-template.json`         | 内网告警标题、来源、区块、错误摘要和截断提示 |
+| `templates/program-output-template.json` | 脚本状态、启动、停止、重复启动和错误回复     |
+| `templates/chat-log-template.json`       | 每日问答日志的新记录字段和内容               |
 
 消息模板使用 `{{变量}}` 占位：
 
@@ -135,7 +144,7 @@ pytest
 
 ## @机器人 提需求
 
-装上机器人后可以在群里 @机器人 用自然语言提需求（改监控目标、加关注版本、调过滤规则），由 Claw 按 `skills/ff-config-assistant` 的草案协议代笔改写 config（起草 → 群内回显 → 逐字「写入」确认 → 落盘 → 校验，失败自动回滚）。
+装上机器人后可以在群里 @机器人 用自然语言提需求（改监控目标、加关注版本、调过滤规则），由 Claw 按 `skills/ff-config-assistant` 的草案协议代笔改写白名单配置（起草 → 群内回显 → 逐字「写入」确认 → 落盘 → 校验，失败自动回滚）。
 
 部署要求：
 
@@ -160,11 +169,11 @@ python -m src.program_manager start heartbeat.sh 5
 python -m src.program_manager stop heartbeat.sh
 ```
 
-查询遍历 BASH 并用 pgrep 检查实际进程；启动前查重，未运行时用 `bash` 启动。`src/io.py` 以 `Output` 基类共用模板操作、JSONL 日志和终端输出，`IntranetOutput`、`ProgramOutput` 分别负责内网告警和程序管理文案；`config/program-output-template.json` 定义程序管理文案，Claw 直接回复结果中的 `message`。操作日志在 `logs/program-control/YYYY-MM-DD.log`，Claw 通过 `--question` 将用户原话写入 `question`，失败请求也会留痕；脚本输出在 `logs/program-control/output/`，不维护 PID 状态文件。详见 [程序管理说明](docs/program-control.md)。
+查询遍历 BASH 并用 pgrep 检查实际进程；启动前查重，未运行时用 `bash` 启动。`src/io.py` 以 `Output` 基类共用模板操作、JSONL 日志和终端输出，`IntranetOutput`、`ProgramOutput` 分别负责内网告警和程序管理文案；`templates/program-output-template.json` 定义程序管理文案，Claw 直接回复结果中的 `message`。操作日志在 `logs/program-control/YYYY-MM-DD.log`，Claw 通过 `--question` 将用户原话写入 `question`，失败请求也会留痕；脚本输出在 `logs/program-control/output/`，不维护 PID 状态文件。详见 [程序管理说明](docs/program-control.md)。
 
 ## 机器人问答日志
 
-通知器每轮自动把企微群里的用户问题和机器人最终回答写入 `logs/chat/YYYY-MM-DD.log`，每天一个文件，有问答才生成。`config/chat-log-template.json` 控制新记录的 JSON 字段和内容，每次同步重新读取；`answerId` 必须保留用于去重，已有日志不会被改写。默认每条包含 `question`、`answer`、问答时间和消息 ID，不记录模型思考过程或工具细节。也可以手动同步：
+通知器每轮自动把企微群里的用户问题和机器人最终回答写入 `logs/chat/YYYY-MM-DD.log`，每天一个文件，有问答才生成。`templates/chat-log-template.json` 控制新记录的 JSON 字段和内容，每次同步重新读取；`answerId` 必须保留用于去重，已有日志不会被改写。默认每条包含 `question`、`answer`、问答时间和消息 ID，不记录模型思考过程或工具细节。也可以手动同步：
 
 ```bash
 python -m src.io
@@ -186,7 +195,8 @@ kimiclaw-monitor-messages/
 ├── skills/
 │   ├── ff-config-assistant/SKILL.md   # @机器人 需求变更草案协议（可选 OpenClaw 用）
 │   └── ff-program-assistant/SKILL.md  # @机器人 程序控制固定命令手册
-├── config/                     # 配置（全部热读；*.example.json 为入库模板）
+├── config/                     # 监控、机器人、规则和定时配置
+├── templates/                  # IO 输出模板（*.example.json 为入库示例）
 ├── scripts/
 │   ├── linux/                         # install.sh + 3 个 systemd unit 模板
 │   ├── windows/                       # Windows 计划任务脚本（历史回滚保留）

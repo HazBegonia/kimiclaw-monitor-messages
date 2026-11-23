@@ -26,7 +26,7 @@ DEFAULTS: dict[str, Any] = {
     "notifyLogDir": "logs/intranet-notify",
     "stateFile": "state/notify-state.json",
     "rulesFile": "config/triage-rules.json",
-    "templateFile": "config/notify-template.json",
+    "templateFile": "templates/notify-template.json",
     "lockFile": "state/notifier-resident.lock",
     "botToolStateFile": "state/bot-tool-state.json",
     "sourceUrl": "",

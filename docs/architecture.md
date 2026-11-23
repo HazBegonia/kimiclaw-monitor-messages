@@ -10,18 +10,18 @@
   → 落盘:logs/intranet-diff/(增减)、logs/intranet-focus/<版本id>/(版本快照,仅变化时)、logs/intranet-error/(JSONL)
   → 通知器 kimiclaw-notifier.service 按游标消费
   → 确定性规则判定(config/triage-rules.json,每轮热读)
-  → 重要则由 src/io.py 读取 config/notify-template.json,填充并聚合一条 markdown
+  → 重要则由 src/io.py 读取 templates/notify-template.json,填充并聚合一条 markdown
   → src/bot_tool.py 借 FF 智能机器人长连接直推企微群
   → 推完热重载拉活 Claw
 ```
 
 ## 统一输出
 
-`src/io.py` 按功能分为三个类:`Output` 基类提供共用的 JSON 模板读取、变量替换、JSONL 日志和终端输出;`IntranetOutput` 负责内网告警模板校验、Markdown 聚合和截断;`ProgramOutput` 负责程序状态、启动、停止和错误文案。程序管理的结构化结果采用 stderr `message` + stdout JSON。采集器、通知器和程序管理器只准备业务数据;原有配置文件、日志目录、JSON 字段和企微推送方式不变。
+`src/io.py` 按功能分为四个类:`Output` 基类提供共用的 JSON 模板读取、变量替换、JSONL 日志和终端输出;`IntranetOutput` 负责内网告警模板校验、Markdown 聚合和截断;`ProgramOutput` 负责程序状态、启动、停止和错误文案;`ChatLogger` 负责企微问答提取和每日日志。输出模板统一放在 `templates/`,监控和运行配置仍放在 `config/`。程序管理的结构化结果采用 stderr `message` + stdout JSON。采集器、通知器和程序管理器只准备业务数据;日志目录、JSON 字段和企微推送方式不变。
 
 ## Claw 问答日志
 
-通知器每轮调用 `src/io.py` 的 `ChatLogger`,读取 `~/.openclaw/agents/main/sessions/sessions.json` 识别企微会话及其历史会话,从对应 JSONL 中配对用户问题和机器人最终文本回答。按 `config/chat-log-template.json` 渲染新记录并按回答日期写 `logs/chat/YYYY-MM-DD.log`;模板每次同步热读,必须保留 `answerId` 用于去重,已有日志不改写。思考过程、工具调用和未回答问题不写入。可独立运行 `python -m src.io`,dry-run 不产生问答日志。
+通知器每轮调用 `src/io.py` 的 `ChatLogger`,读取 `~/.openclaw/agents/main/sessions/sessions.json` 识别企微会话及其历史会话,从对应 JSONL 中配对用户问题和机器人最终文本回答。按 `templates/chat-log-template.json` 渲染新记录并按回答日期写 `logs/chat/YYYY-MM-DD.log`;模板每次同步热读,必须保留 `answerId` 用于去重,已有日志不改写。思考过程、工具调用和未回答问题不写入。可独立运行 `python -m src.io`,dry-run 不产生问答日志。
 
 ## 需求交互链路(claw ↔ config,2026-09-24 起)
 
@@ -29,7 +29,7 @@
 上级 @FF(企微群)
   → Claw gateway(wecom 长连接,唯一需求入口)
   → skills/ff-config-assistant(草案协议:起草 → 群内回显 → 逐字「写入」→ 落盘 → 写后校验,失败自动回滚)
-  → 直接改写 config/{monitors,intranet-versions,triage-rules,notifier,notify-template}.json(仅此 5 个白名单文件,其余一律拒绝)
+  → 直接改写 config/{monitors,intranet-versions,triage-rules,notifier}.json 或 templates/notify-template.json(仅此 5 个白名单文件,其余一律拒绝)
   → py 采集器/通知器下一轮热读生效(约 10 秒,无需重启任何服务)
 ```
 
@@ -39,11 +39,11 @@ claw 与 py 链路之间**唯一接口是 config 文件**:py 代码只读不写 
 
 ## 三个 systemd 服务
 
-| 组件         | systemd unit                        | 进程                                                                 | 职责                                                          |
-| ------------ | ----------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------- |
-| 采集器       | `kimiclaw-monitor.service`          | `python -m src.intranet_filename_monitor`                           | 轮询内网页面,变化/错误写日志(详见 `intranet-file-monitor.md`) |
-| 通知器       | `kimiclaw-notifier.service`         | `python -m src.intranet_notifier`                                   | 游标消费 → 规则判定 → 借线推送 → 拉活 Claw                    |
-| Claw gateway | `kimiclaw-openclaw-gateway.service` | `openclaw gateway run`                                               | 收上级 @FF 需求(实例 OpenClaw-oRz);**不参与推送**             |
+| 组件         | systemd unit                        | 进程                                      | 职责                                                          |
+| ------------ | ----------------------------------- | ----------------------------------------- | ------------------------------------------------------------- |
+| 采集器       | `kimiclaw-monitor.service`          | `python -m src.intranet_filename_monitor` | 轮询内网页面,变化/错误写日志(详见 `intranet-file-monitor.md`) |
+| 通知器       | `kimiclaw-notifier.service`         | `python -m src.intranet_notifier`         | 游标消费 → 规则判定 → 借线推送 → 拉活 Claw                    |
+| Claw gateway | `kimiclaw-openclaw-gateway.service` | `openclaw gateway run`                    | 收上级 @FF 需求(实例 OpenClaw-oRz);**不参与推送**             |
 
 三服务互相独立,可单独启停。unit 模板在 `scripts/linux/*.service.template`,由 `scripts/linux/install.sh` 渲染安装到新机器。
 
@@ -76,7 +76,7 @@ FF 长连接平时归 Claw 的 wecom 插件(收 @FF 需求);`src/bot_tool.py` `p
 ## 凭证与配置
 
 - FF Bot ID/Secret 存 gitignored 的 `state/secrets/wecom-bot.json`;目标群 chatid 在 `config/notifier.json`。`src/.env` 只保存 DEFAULT_URL、间隔、超时、时区、日志/锁路径和渲染限制等常量。**仓库内禁止明文密钥。**
-- `config/monitors.json`、`config/intranet-versions.json`、`config/triage-rules.json`、`config/notifier.json`、`config/notify-template.json` 全部热读生效。两条等价入口(2026-09-24 起,change: ff-config-assistant):人直改;或群内 @FF 提需求,经 `skills/ff-config-assistant/SKILL.md` 草案协议(起草 → 回显 → 逐字「写入」→ 落盘 → 写后校验,失败自动回滚)由 Claw 代笔,白名单外一律拒绝。`.env` 仅供人工修改,重启对应服务后生效。草案台账 `state/chat-drafts.json`,留痕 `logs/intranet-notify/`(stage: `config-change`)。
+- `config/monitors.json`、`config/intranet-versions.json`、`config/triage-rules.json`、`config/notifier.json`、`templates/notify-template.json` 全部热读生效。两条等价入口(2026-09-24 起,change: ff-config-assistant):人直改;或群内 @FF 提需求,经 `skills/ff-config-assistant/SKILL.md` 草案协议(起草 → 回显 → 逐字「写入」→ 落盘 → 写后校验,失败自动回滚)由 Claw 代笔,白名单外一律拒绝。`.env` 仅供人工修改,重启对应服务后生效。草案台账 `state/chat-drafts.json`,留痕 `logs/intranet-notify/`(stage: `config-change`)。
 
 ## 前置约束
 

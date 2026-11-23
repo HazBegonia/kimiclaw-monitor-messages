@@ -17,7 +17,7 @@ from src.io import Output, ProgramOutput
 ROOT = Path(__file__).resolve().parent.parent
 PROGRAM = ROOT / "program"
 LOGS = ROOT / "logs/program-control"
-TEMPLATE = ROOT / "config/program-output-template.json"
+TEMPLATE = ROOT / "templates/program-output-template.json"
 load_dotenv(PROGRAM / ".env")
 
 

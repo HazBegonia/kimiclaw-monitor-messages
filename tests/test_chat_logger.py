@@ -36,7 +36,7 @@ def write_index(sessions_dir, entries):
 def make_template(tmp_path):
     path = tmp_path / "chat-template.json"
     path.write_text(
-        Path("config/chat-log-template.example.json").read_text(encoding="utf-8"),
+        Path("templates/chat-log-template.example.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     return path

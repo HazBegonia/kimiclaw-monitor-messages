@@ -273,7 +273,7 @@ class ChatLogger(Output):
         self,
         sessions_dir: Path = Path.home() / ".openclaw/agents/main/sessions",
         log_dir: Path = Path("logs/chat"),
-        template_path: Path = Path("config/chat-log-template.json"),
+        template_path: Path = Path("templates/chat-log-template.json"),
     ):
         self.sessions_dir = sessions_dir
         self.log_dir = log_dir

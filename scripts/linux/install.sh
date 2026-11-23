@@ -8,7 +8,7 @@
 #   1. 准备 Python 环境(优先 --python 指定的解释器;其次已有 conda env
 #      kimiclaw-monitor-messages;否则在仓库下建 .venv,要求 python>=3.11)
 #      并 pip install -r requirements.txt
-#   2. config/*.example.json → config/*.json(已存在则跳过,不覆盖)
+#   2. config/ 与 templates/ 下的 *.example.json → 同目录实际 JSON(已存在则跳过,不覆盖)
 #   3. state/secrets/wecom-bot.json 不存在则放模板并提醒填写(chmod 600)
 #   4. 渲染 scripts/linux/*.service.template → ~/.config/systemd/user/
 #      (可用环境变量 SYSTEMD_USER_DIR 覆盖目标目录,便于测试)
@@ -68,6 +68,16 @@ for f in "$REPO_DIR"/config/*.example.json; do
   else
     cp "$f" "$target"
     say "生成: ${target#$REPO_DIR/}  ← 请按实际情况编辑"
+  fi
+done
+
+for f in "$REPO_DIR"/templates/*.example.json; do
+  target="${f%.example.json}.json"
+  if [ -e "$target" ]; then
+    say "已存在,跳过: ${target#$REPO_DIR/}"
+  else
+    cp "$f" "$target"
+    say "生成: ${target#$REPO_DIR/}"
   fi
 done
 

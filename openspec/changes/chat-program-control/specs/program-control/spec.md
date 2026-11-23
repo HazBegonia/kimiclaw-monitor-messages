@@ -83,7 +83,7 @@
 
 ### Requirement: JSON 模板统一输出
 
-系统 SHALL 从 `config/program-output-template.json` 读取状态、启动、重复启动、停止、输出和错误模板，并在结果中提供渲染后的 `message`。终端和 Claw 群回复 MUST 共用该文案，修改模板不得要求修改管理器或 Skill。
+系统 SHALL 从 `templates/program-output-template.json` 读取状态、启动、重复启动、停止、输出和错误模板，并在结果中提供渲染后的 `message`。终端和 Claw 群回复 MUST 共用该文案，修改模板不得要求修改管理器或 Skill。
 
 #### Scenario: 修改模板后输出变化
 

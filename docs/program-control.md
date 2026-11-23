@@ -47,7 +47,7 @@ python -m src.program_manager stop heartbeat.sh
 
 ## 输出模板
 
-`config/program-output-template.json` 定义查询、启动、重复启动、停止、未运行、停止超时、脚本输出和错误文案。`src/io.py` 的 `ProgramOutput` 每次操作重新读取模板，用 `{{变量}}` 填充内容，并在 JSON 结果中增加 `message`。
+`templates/program-output-template.json` 定义查询、启动、重复启动、停止、未运行、停止超时、脚本输出和错误文案。`src/io.py` 的 `ProgramOutput` 每次操作重新读取模板，用 `{{变量}}` 填充内容，并在 JSON 结果中增加 `message`。
 
 共用的 `Output` 基类负责终端输出：stderr 打印这个 `message`，stdout 保留完整 JSON；Claw 将 `message` 原样回复到群里。因此修改模板即可同时调整终端和企微群的文案，不需要修改 Python 或 Skill。脚本原始输出仍保存在 `outputLog`。
 

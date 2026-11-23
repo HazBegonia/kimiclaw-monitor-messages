@@ -34,65 +34,159 @@ program/.env 的 BASH 注册清单 ───────────────
 
 ## 从0开始部署
 
-### 注册企业微信智能机器人
+下面按**完整功能**部署：内网监控和推送、群里 @机器人 改配置、查询或控制 Bash，以及从 Kimi 网页访问这台 Claw。只部署监控和推送时，可以跳过第 2～5 步；项目核心链路不依赖 OpenClaw 或 LLM。
+
+准备一台使用 systemd 的 Linux 机器。它需要能访问内网监控页面，并能出网访问 Kimi、OpenClaw、npm 和企业微信服务器；本机需有 `git`、`curl`、Python ≥ 3.11。所有命令都用运行服务的同一个 Linux 用户执行，不要换到 root。
+
+### 1. 注册企业微信智能机器人
 
 1. 打开企业微信电脑客户端，进入 **工作台 → 智能机器人**。
 2. 点击 **创建**，选择 **手动创建**。填写机器人名称（例如 `FF`）和用途说明。
 3. 在创建页面底部切换为 **API 模式**，连接方式选择 **长连接**。长连接只需要部署机器能访问企业微信服务器，不需要公网 IP、域名备案或可信 IP。
-4. 完成创建后，保存机器人的 **BotID** 和 **Secret**。Secret 要区分大小写，后续填入 `state/secrets/wecom-bot.json`，不要发到群里或提交到 Git。
+4. 完成创建后，保存机器人的 **BotID** 和 **Secret**。Secret 要区分大小写，不要发到群里或提交到 Git。
 5. 检查机器人的 **消息** 权限。如果调用时返回 `errcode 850002`，需要机器人创建者在 **工作台 → 智能机器人** 中完成消息权限授权。
-6. 把机器人加入接收告警的目标群，然后在群里 @机器人发送一条消息。机器人需要先收到会话消息，之后才能主动向该群推送。
-7. 从机器人收到的消息回调中记录目标群 `chatid`，后续填入 `config/notifier.json`。安装并配置 OpenClaw 后，也可以用 `openclaw sessions list` 查找。
+6. 把机器人加入接收告警的目标群。等第 6 步的 gateway 启动后，在群里 @机器人 发送一条消息，再用 `openclaw sessions list` 找到目标群 `chatid`。
 
 长连接的技术说明可查看 [企业微信官方文档](https://developer.work.weixin.qq.com/document/path/101463)。
 
-交付方需要先准备好这三样，缺一个都跑不起来：
+### 2. 在新机器上安装 OpenClaw
 
-| 准备项             | 说明                                                                                                                                                 |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 企业微信智能机器人 | 电脑客户端「工作台 → 智能机器人 → 创建 → API 模式 → **长连接**」，拿到 **BotID + Secret**                                                            |
-| 目标群 chatid      | 把机器人拉进目标群，**群里有人 @机器人 发过一条消息**后，chatid 出现在机器人收到的回调帧里（装了 OpenClaw 的话 `openclaw sessions list` 可直接看到） |
-| 一台 Linux 机器    | 能访问被监控的内网页面，且能出网连 `wss://openws.work.weixin.qq.com`（443）；Python ≥ 3.11                                                           |
+机器上不需要提前安装 Node 或 OpenClaw。执行[官方安装脚本](https://docs.openclaw.ai/install)，它会检查系统、安装受支持的 Node 和 OpenClaw：
 
-注意事项：
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
+```
 
-- ⚠️ **同一 botId 连接独占**：一个机器人同时只能一处在线。不要用同一个机器人凭证部署第二套，也不要和企业微信客户端里正在调试的会话并存。
-- 机器人被移出群再加回后，需要重新 @机器人 并核对 chatid。
-- 可选组件：Node ≥ 22 + OpenClaw（仅用于"群里 @机器人 提需求"的交互入口；不装则监控+推送完全照常）。
+安装结束后重新打开终端，让 `PATH` 生效，再检查：
 
-### 安装并启动
+```bash
+node --version
+openclaw --version
+openclaw doctor
+```
+
+如果提示 `openclaw: command not found`，执行 `npm prefix -g`，把输出目录下的 `bin` 加入当前用户的 `PATH`。不要用另一台机器上的 Node 版本要求替代官方安装脚本的检查结果。
+
+### 3. 配置 Kimi 模型
+
+本项目当前服务器使用 Kimi Code 的 `kimi-for-coding` 作为 Claw 默认模型。新部署按下面的官方插件方式配置，不需要手工编写模型 provider JSON。
+
+1. 确认 Kimi 会员已开通 Kimi Code 权益。
+2. 按 [Kimi Code 接入说明](https://www.kimi.com/code/docs/third-party-tools/other-coding-agents.html)进入 Kimi Code 控制台，点击 **新建 API Key**。完整 Key 只显示一次，妥善保存。
+3. 在部署机器上安装模型插件并启动交互式配置：
+
+```bash
+openclaw plugins install @openclaw/kimi-provider
+OPENCLAW_LOCALE=zh-CN openclaw onboard --classic \
+  --auth-choice kimi-code-api-key \
+  --skip-daemon --skip-channels --skip-ui
+```
+
+按提示粘贴 Kimi Code API Key。Agent 使用默认的 `main`，工作目录可保持 `~/.openclaw/workspace`。这里跳过 OpenClaw 自带的 gateway 服务和渠道向导，因为第 4 步会配置企业微信，第 6 步会由本项目安装 gateway 服务。
+
+4. 选择并验证默认模型：
+
+```bash
+openclaw models set kimi/kimi-for-coding
+openclaw models status
+openclaw agent --local --session-id setup-smoke-test \
+  --message '只回复：KIMI_OK'
+```
+
+最后一条命令会真实调用模型，应返回 `KIMI_OK`。模型配置和 Key 由 OpenClaw 保存在当前用户的 `~/.openclaw/`，不要复制到仓库。
+
+> 新版 OpenClaw 的模型名是 `kimi/kimi-for-coding`。本项目现有服务器使用旧版 provider ID，因此 `openclaw models status` 显示 `kimi-coding/kimi-for-coding`；两者指的是同一类 Kimi Code 模型，不要在旧服务器上强行改成新版前缀。以本机 `openclaw models list` 和 `models status` 的结果为准。详见 [OpenClaw 的 Kimi 模型文档](https://docs.openclaw.ai/providers/moonshot)。
+
+### 4. 安装企业微信插件并接入机器人
+
+使用[企业微信官方 OpenClaw 插件](https://github.com/WecomTeam/wecom-openclaw-plugin)，不要用同名社区插件替代：
+
+```bash
+npx -y @wecom/wecom-openclaw-cli install
+```
+
+安装向导会询问 **Bot ID** 和 **Secret**，填第 1 步创建的同一个机器人。连接模式使用默认的 `websocket`，然后确认渠道已启用：
+
+```bash
+openclaw config set channels.wecom.connectionMode websocket
+openclaw config set channels.wecom.enabled true
+npx -y @wecom/wecom-openclaw-cli doctor
+openclaw plugins list
+```
+
+插件列表中应看到 `@wecom/wecom-openclaw-plugin` 和 `@openclaw/kimi-provider`。此时共有三类插件，用途不要混淆：
+
+| 插件                           | 用途                                  | 安装来源                    |
+| ------------------------------ | ------------------------------------- | --------------------------- |
+| `@openclaw/kimi-provider`      | 给 Claw 提供 Kimi 模型和 API Key 认证 | 第 3 步的 OpenClaw 命令     |
+| `@wecom/wecom-openclaw-plugin` | 接收和回复企业微信消息                | 第 4 步的企微官方安装向导   |
+| `kimi-claw`                    | 把本地 OpenClaw 关联到 Kimi 账号      | 第 5 步的 Kimi 网页专属命令 |
+
+### 5. 关联已有 OpenClaw 到 Kimi Claw
+
+这一步不是新建云端 Claw，而是把刚装好的本地 OpenClaw 绑定到 Kimi 账号：
+
+1. 用开通了 Kimi 会员的账号登录 [kimi.com/bot](https://www.kimi.com/bot)。
+2. 选择 **关联已有 OpenClaw / Link Existing OpenClaw**，不要点 **Create**。
+3. 网页会生成一条包含本次关联 token 的插件安装命令。复制网页给出的**完整命令**，在这台 Linux 机器上、以运行 OpenClaw 的同一用户执行。token 不要发到群里或写入仓库。
+4. 安装完成后检查：
+
+```bash
+openclaw plugins info kimi-claw
+```
+
+状态应为 `loaded`。Kimi 网页的 Claw 列表中应出现这台 OpenClaw。关联方法和托管云 Claw 的区别见 [Kimi Claw 官方概览](https://www.kimi.ai/help/kimi-claw/overview)。
+
+`kimi-claw` 必须使用 Kimi 网页为当前账号生成的安装方式，不要执行 `npm install -g kimi-claw`，也不要从其他服务器复制插件目录代替关联。
+
+### 6. 部署本项目并加载 Skills
 
 ```bash
 # 1. 获取代码
-git clone <仓库地址> && cd kimiclaw-monitor-messages   # 或直接解 tar 包
+git clone <仓库地址>
+cd kimiclaw-monitor-messages   # 或直接解压 tar 包后进入项目目录
 
-# 2. 准备 Python 环境（二选一）
+# 2. 让 main agent 加载本项目的配置助手和程序控制手册
+#    全新安装直接执行；若已有其他 extraDirs，请合并数组，不要覆盖旧值
+openclaw config set skills.load.extraDirs "[\"$PWD/skills\"]"
+openclaw config get skills.load.extraDirs
+
+# 3. 准备 Python 环境（二选一）
 #    a. conda（推荐，与 FF 服务器一致）：
 conda create -y -n kimiclaw-monitor-messages python=3.11
 #    b. 没有 conda 就跳过这步，install.sh 会在仓库下自动建 .venv
 
-# 3. 一键安装：装依赖、从模板生成 config、装 systemd unit 并启动
-scripts/linux/install.sh
+# 4. 安装依赖、生成配置、安装 systemd unit，但先不启动
+scripts/linux/install.sh --no-start
 #    用了 conda 时指定解释器：
-#    scripts/linux/install.sh --python "$(conda run -n kimiclaw-monitor-messages python -c 'import sys; print(sys.executable)')"
-#    其他可选参数：--no-start 只安装不启动
-#    不指定 --python 时 install.sh 自动探测：已有 conda env kimiclaw-monitor-messages → 用它；否则建 .venv
+#    scripts/linux/install.sh --no-start --python "$(conda run -n kimiclaw-monitor-messages python -c 'import sys; print(sys.executable)')"
+#    检测到 openclaw 时会同时安装 kimiclaw-openclaw-gateway.service
 
-# 4. 填写机器人凭证（install.sh 已从模板生成空文件）
+# 5. 填写与 OpenClaw 企业微信渠道相同的机器人凭证
 vim state/secrets/wecom-bot.json
 #    { "botId": "你的BotID", "secret": "你的Secret" }
-
-# 5. 按实际环境编辑 src/.env 和 config/ 下的 JSON 文件（见下节「配置说明」）
-
-# 6. 改完重启生效（配置本身热读，但凭证是连接时读的，首次填好后重启一次最稳妥）
-systemctl --user restart kimiclaw-monitor kimiclaw-notifier
 ```
 
-需要开机自启、注销不掉：
+按实际环境编辑 `src/.env` 和 `config/` 下的 JSON 文件，尤其是 `config/monitors.json` 的内网 URL 和 `config/notifier.json` 的目标群 `chatid`，详见下节「配置说明」。如果还没有 `chatid`，先启动一次 gateway，在目标群 @机器人 后执行 `openclaw sessions list`，找到后填入。
+
+启动完整服务：
+
+```bash
+systemctl --user restart kimiclaw-monitor kimiclaw-notifier kimiclaw-openclaw-gateway
+systemctl --user status kimiclaw-monitor kimiclaw-notifier kimiclaw-openclaw-gateway
+```
+
+需要开机自启、注销后仍运行：
 
 ```bash
 loginctl enable-linger <用户名>
 ```
+
+注意事项：
+
+- **同一 botId 连接独占**：一个机器人同时只能一处在线。不要用同一个机器人凭证部署第二套。项目通知器推送时会短暂借用连接，随后自动恢复 Claw。
+- 机器人被移出群再加回后，需要重新 @机器人 并核对 chatid。
+- OpenClaw 的模型 Key、关联 token 和企微 Secret 都属于全局运行环境或凭证文件，不要写进项目配置、日志或 Git。
 
 ## 配置说明
 
@@ -135,23 +229,26 @@ python -m src.intranet_notifier --once --dry-run
 python -m src.intranet_notifier --once
 
 # 3. 看服务状态与日志
-systemctl --user status kimiclaw-monitor kimiclaw-notifier
+systemctl --user status kimiclaw-monitor kimiclaw-notifier kimiclaw-openclaw-gateway
 journalctl --user -u kimiclaw-notifier -f
+journalctl --user -u kimiclaw-openclaw-gateway -f
 
-# 4.（可选）跑测试自检（pytest 已在 requirements.txt 里，install.sh 已装）
+# 4. 检查 Claw 模型、插件和企微会话
+openclaw models status
+openclaw plugins list
+openclaw sessions list
+
+# 5.（可选）跑测试自检（pytest 已在 requirements.txt 里，install.sh 已装）
 pytest
 ```
+
+完整功能还要在群里做一次真实验收：@机器人 询问「当前监控哪些 URL」，应返回 `config/monitors.json` 的实际内容；再询问「查询运行脚本」，应返回 `program/.env` 中登记脚本的真实状态。配置变更类请求必须先回显草案，只有逐字回复「写入」才允许落盘。Kimi 网页侧也应能打开已关联的 OpenClaw 并正常对话。
 
 ## @机器人 提需求
 
 装上机器人后可以在群里 @机器人 用自然语言提需求（改监控目标、加关注版本、调过滤规则），由 Claw 按 `skills/ff-config-assistant` 的草案协议代笔改写白名单配置（起草 → 群内回显 → 逐字「写入」确认 → 落盘 → 校验，失败自动回滚）。
 
-部署要求：
-
-1. Node ≥ 22，`npm i -g openclaw`
-2. 安装企微插件 `wecom-openclaw-plugin` 与 `@openclaw/kimi-provider`；kimi-claw 插件需要 Kimi Claw 订阅号环境
-3. `~/.openclaw/openclaw.json`：填入同一机器人的 `channels.wecom` 凭证，`skills.load.extraDirs` 指向本仓库 `skills/`
-4. 重跑 `scripts/linux/install.sh`（检测到 openclaw 会自动加装 `kimiclaw-openclaw-gateway.service`）
+首次部署按上文「从0开始部署」完成模型、企业微信插件、Kimi Claw 关联和 Skills 加载。配置修改只涉及白名单文件，不需要改采集器或通知器代码。
 
 ## @机器人 控制 program 脚本
 

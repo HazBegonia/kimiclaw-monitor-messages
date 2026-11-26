@@ -19,6 +19,7 @@ TIME_ZONE = ZoneInfo(os.getenv("TIME_ZONE", "Asia/Shanghai"))
 
 DEFAULTS: dict[str, Any] = {
     "chatid": "",
+    "chatType": 2,
     "secretsFile": "state/secrets/wecom-bot.json",
     "pollIntervalSeconds": 5,
     "diffLogDir": "logs/intranet-diff",
@@ -64,7 +65,10 @@ def load_config(path: Path) -> dict[str, Any]:
                 raise ValueError("config.timeouts must be an object")
             cfg["timeouts"] = {**DEFAULTS["timeouts"], **data["timeouts"]}
     if not str(cfg.get("chatid") or "").strip():
-        raise ValueError("config.chatid is required (target group)")
+        raise ValueError("config.chatid is required (target conversation)")
+    chat_type = cfg.get("chatType")
+    if isinstance(chat_type, bool) or not isinstance(chat_type, int) or chat_type not in (1, 2):
+        raise ValueError("config.chatType must be 1 (single) or 2 (group)")
     for key in ("diffLogDir", "errorLogDir", "notifyLogDir", "stateFile", "rulesFile", "templateFile", "lockFile", "secretsFile"):
         if not str(cfg.get(key) or "").strip():
             raise ValueError(f"config.{key} is required")

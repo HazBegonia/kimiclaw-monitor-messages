@@ -4,7 +4,7 @@
 
 ## 环境
 
-- 仓库：/home/u504/kimiclaw-monitor-messages（branch: release_kimiclaw_v1.0.0，用 tar 复制部署；GitHub 仓库为私有，服务器上 git pull 需凭据）
+- 仓库：/home/u504/.openclaw/workspace/kimiclaw-monitor-messages（branch: release_kimiclaw_v1.0.0，用 tar 复制部署；GitHub 仓库为私有，服务器上 git pull 需凭据）
 - Python：conda env `kimiclaw-monitor-messages`（/home/u504/anaconda3/envs/...，python 3.11，唯一第三方依赖 websocket-client）
 - Node：/home/u504/node22（v22.20.0，用户态解压安装），openclaw 2026.6.35 全局装在其中
 - openclaw 配置：~/.openclaw/openclaw.json（从 Windows 复制后清洗：skills extraDirs 指向服务器仓库、去掉 weixin hooks；channels.wecom 凭证同 FF）
@@ -44,7 +44,7 @@ BASH=heartbeat.sh,disk_check.sh,system_info.sh
 先执行本地验证：
 
 ```bash
-cd /home/u504/kimiclaw-monitor-messages
+cd /home/u504/.openclaw/workspace/kimiclaw-monitor-messages
 python -m src.program_manager status
 python -m src.program_manager start heartbeat.sh 1
 python -m src.program_manager status

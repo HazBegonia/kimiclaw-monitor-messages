@@ -11,7 +11,7 @@
   → 通知器 kimiclaw-notifier.service 按游标消费
   → 确定性规则判定(config/triage-rules.json,每轮热读)
   → 重要则由 src/io.py 读取 templates/notify-template.json,填充并聚合一条 markdown
-  → src/bot_tool.py 借 FF 智能机器人长连接直推企微群
+  → src/bot_tool.py 借 FF 智能机器人长连接直推企微目标会话(群聊或私聊)
   → 推完热重载拉活 Claw
 ```
 
@@ -66,7 +66,7 @@ FF 长连接平时归 Claw 的 wecom 插件(收 @FF 需求);`src/bot_tool.py` `p
 - 新增/删除文件默认推;
 - 监控器自身错误(`PageValidationError`、`read_config` / `write_state` / `write_snapshot_log` / `read_rules` phase)推;
 - 孤立可重试抖动抑制;同 monitorId+phase 30 分钟窗口 ≥3 次升级为推送;
-- 规则文件损坏 → 沿用 last-good + 群里收到「规则文件损坏」告警;
+- 规则文件损坏 → 沿用 last-good + 目标会话收到「规则文件损坏」告警;
 - 文件名过滤先 suppress 后 include:`suppress.filenamePatterns`(fnmatch 通配)命中的文件名判定前剔除;`push.diff.filenameIncludePatterns` 非空时只推命中的文件名;剔除总数在推送正文合并注明;schema 之外的未知字段直接判规则损坏(防「假配置」;`semantic`/`consecutiveFetchFailures` 占位字段已随 change ff-config-assistant 移除)。
 
 ## 游标:发送成功才推进
@@ -75,12 +75,12 @@ FF 长连接平时归 Claw 的 wecom 插件(收 @FF 需求);`src/bot_tool.py` `p
 
 ## 凭证与配置
 
-- FF Bot ID/Secret 存 gitignored 的 `state/secrets/wecom-bot.json`;目标群 chatid 在 `config/notifier.json`。`src/.env` 只保存 DEFAULT_URL、间隔、超时、时区、日志/锁路径和渲染限制等常量。**仓库内禁止明文密钥。**
+- FF Bot ID/Secret 存 gitignored 的 `state/secrets/wecom-bot.json`;目标会话的 `chatid` 与 `chatType` 在 `config/notifier.json`。`chatType=1` 表示私聊,`chatid` 填用户 userid;`chatType=2` 表示群聊,`chatid` 填群 chatid;缺省按群聊兼容。`src/.env` 只保存 DEFAULT_URL、间隔、超时、时区、日志/锁路径和渲染限制等常量。**仓库内禁止明文密钥。**
 - `config/monitors.json`、`config/intranet-versions.json`、`config/triage-rules.json`、`config/notifier.json`、`templates/notify-template.json` 全部热读生效。两条等价入口(2026-09-24 起,change: ff-config-assistant):人直改;或群内 @FF 提需求,经 `skills/ff-config-assistant/SKILL.md` 草案协议(起草 → 回显 → 逐字「写入」→ 落盘 → 写后校验,失败自动回滚)由 Claw 代笔,白名单外一律拒绝。`.env` 仅供人工修改,重启对应服务后生效。草案台账 `state/chat-drafts.json`,留痕 `logs/intranet-notify/`(stage: `config-change`)。
 
 ## 前置约束
 
-- 目标群里须有人 @FF 发过消息,机器人才能主动推送;机器人被移出群再加回后需重新 @FF 并核对 chatid。
+- 目标会话须先与机器人交互:群聊中须有人 @FF 发过消息,私聊中须由目标用户给 FF 发过消息。机器人被移出群再加回后需重新 @FF 并核对群 chatid。
 - 单实例由心跳锁保证:`state/monitor-resident.lock`、`state/notifier-resident.lock`(活锁安静退出、陈旧可接管)。
 
 ## 回滚(分钟级)

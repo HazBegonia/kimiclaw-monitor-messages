@@ -15,10 +15,11 @@ from src.wecom_bot_client import WecomBotTimeoutError
 
 # ---------------------------------------------------------------- helpers
 
-def make_config(tmp_path: Path, *, chatid="chat-1") -> Path:
+def make_config(tmp_path: Path, *, chatid="chat-1", chat_type=2) -> Path:
     cfg = tmp_path / "notifier.json"
     cfg.write_text(json.dumps({
         "chatid": chatid,
+        "chatType": chat_type,
         "secretsFile": str(tmp_path / "secrets.json"),
         "timeouts": {"connect": 1, "ack": 1},
     }), encoding="utf-8")
@@ -27,7 +28,7 @@ def make_config(tmp_path: Path, *, chatid="chat-1") -> Path:
 
 
 class FakeClient:
-    """Stands in for WecomBotClient; outcomes: ("ok", None) | ("fail", exc)."""
+    """Target-agnostic stand-in for either concrete bot client."""
 
     def __init__(self, outcomes=(), on_send=None):
         self.outcomes = list(outcomes)
@@ -60,6 +61,18 @@ class FakeRun:
         if isinstance(result, BaseException):
             raise result
         return result
+
+
+def capture_factory(monkeypatch, client):
+    """Capture how bot_tool selects a concrete client without opening a socket."""
+    calls = []
+
+    def factory(secrets_path, **kwargs):
+        calls.append(kwargs)
+        return client
+
+    monkeypatch.setattr(bot_tool, "make_client_from_secrets", factory)
+    return calls
 
 
 def make_now(start=1_000_000.0):
@@ -95,6 +108,44 @@ def test_push_full_flow_sends_then_restores_and_clears(tmp_path):
     assert events == ["send", "cli", "cli"]  # restore strictly after the send
     # ledger settled: no debt, backoff zeroed
     assert load_ledger(state_path) == {"pendingRestore": None, "sendBackoff": {"failCount": 0, "nextRetryAt": None}}
+
+
+def test_push_to_single_chat_creates_private_client(tmp_path, monkeypatch):
+    config_path = make_config(tmp_path, chatid="LiFeiFan", chat_type=1)
+    client = FakeClient()
+    factory_calls = capture_factory(monkeypatch, client)
+
+    push_markdown("private", config_path=config_path, state_path=tmp_path / "state.json",
+                  cli_run=FakeRun())
+
+    assert factory_calls == [{"connect_timeout": 1.0, "ack_timeout": 1.0, "chat_type": 1}]
+    assert client.calls == [("LiFeiFan", "private")]
+
+
+def test_missing_chat_type_defaults_to_group_client(tmp_path, monkeypatch):
+    config_path = make_config(tmp_path)
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    del data["chatType"]
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    client = FakeClient()
+    factory_calls = capture_factory(monkeypatch, client)
+
+    push_markdown("group", config_path=config_path, state_path=tmp_path / "state.json",
+                  cli_run=FakeRun())
+
+    assert factory_calls == [{"connect_timeout": 1.0, "ack_timeout": 1.0, "chat_type": 2}]
+    assert client.calls == [("chat-1", "group")]
+
+
+def test_invalid_chat_type_is_rejected_before_connecting(tmp_path):
+    config_path = make_config(tmp_path, chat_type=0)
+    client = FakeClient()
+
+    with pytest.raises(BotToolError, match="chatType"):
+        push_markdown("x", config_path=config_path, state_path=tmp_path / "state.json",
+                      client_factory=lambda: client, cli_run=FakeRun())
+
+    assert not client.calls
 
 
 def test_push_writes_debt_before_connecting(tmp_path):

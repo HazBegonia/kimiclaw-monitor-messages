@@ -32,6 +32,32 @@ def make_cfg(tmp_path: Path, *, chatid="chat-1") -> dict:
     }
 
 
+def test_load_config_defaults_to_group_and_accepts_single_chat(tmp_path):
+    cfg = make_cfg(tmp_path)
+    config_path = tmp_path / "notifier.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    assert load_config(config_path)["chatType"] == 2
+
+    cfg["chatid"] = "LiFeiFan"
+    cfg["chatType"] = 1
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+    loaded = load_config(config_path)
+    assert loaded["chatid"] == "LiFeiFan"
+    assert loaded["chatType"] == 1
+
+
+@pytest.mark.parametrize("chat_type", [0, 3, "1", True])
+def test_load_config_rejects_invalid_chat_type(tmp_path, chat_type):
+    cfg = make_cfg(tmp_path)
+    cfg["chatType"] = chat_type
+    config_path = tmp_path / "notifier.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="chatType"):
+        load_config(config_path)
+
+
 def write_rules(cfg: dict):
     # business rules mirroring the shipped config; DEFAULT_RULES is only the
     # minimal self-heal set and must not leak business semantics into tests

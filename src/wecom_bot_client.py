@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import json
 import os
 import time
@@ -80,10 +81,13 @@ class _FakeWS:
         pass
 
 
-class WecomBotClient:
-    """On-demand proactive-push client for one send cycle per use.
+class WecomBotClient(ABC):
+    """Shared base for one on-demand proactive-push cycle.
 
-    Threading model: single-threaded use; one instance owns one socket at a time.
+    The base owns credentials, WebSocket transport, authentication, ack matching,
+    error handling and cleanup. Concrete subclasses only choose the target type,
+    so callers never mix group and private-conversation protocol details.
+    One instance is single-threaded and owns at most one socket at a time.
     """
 
     def __init__(
@@ -167,11 +171,16 @@ class WecomBotClient:
                 return frame
             # unrelated frame (e.g. stray callback); keep waiting
 
+    @abstractmethod
     def send_markdown(self, chatid: str, content: str) -> dict[str, Any]:
-        """Run one on-demand send cycle. Returns the send ack on success.
+        """Send markdown through a concrete group or private-conversation client."""
+        raise NotImplementedError
 
-        Raises WecomBotError subclasses on failure (connection/auth/timeout/kicked).
-        Callers convert failures into a failure record and keep the cursor untouched.
+    def _send_markdown(self, chatid: str, content: str, *, chat_type: int) -> dict[str, Any]:
+        """Run the shared connect → auth → send → ack → close sequence.
+
+        Only the target-specific subclasses supply chat_type. Every send closes
+        its socket, including authentication, timeout and server-rejection paths.
         """
         self._ws = self._connect()
         try:
@@ -194,7 +203,7 @@ class WecomBotClient:
                 {
                     "cmd": CMD_SEND_MSG,
                     "headers": {"req_id": send_req},
-                    "body": {"chatid": chatid, "msgtype": "markdown", "markdown": {"content": content}},
+                    "body": {"chatid": chatid, "chat_type": chat_type, "msgtype": "markdown", "markdown": {"content": content}},
                 }
             )
             send_ack = self._wait_ack(send_req, "send")
@@ -212,20 +221,42 @@ class WecomBotClient:
         return False
 
 
+class WecomGroupBotClient(WecomBotClient):
+    """Push to a group conversation; chatid is the group's chatid."""
+
+    def send_markdown(self, chatid: str, content: str) -> dict[str, Any]:
+        """Send markdown with the protocol's explicit group type (2)."""
+        return self._send_markdown(chatid, content, chat_type=2)
+
+
+class WecomPrivateBotClient(WecomBotClient):
+    """Push to a user's direct conversation; chatid is the user's userid."""
+
+    def send_markdown(self, chatid: str, content: str) -> dict[str, Any]:
+        """Send markdown with the protocol's explicit private-chat type (1)."""
+        return self._send_markdown(chatid, content, chat_type=1)
+
+
 def make_client_from_secrets(
     secrets_path,
     *,
     connect_timeout: float = 10.0,
     ack_timeout: float = 15.0,
     extra_auth_body: dict[str, Any] | None = None,
+    chat_type: int = 2,
 ) -> WecomBotClient:
-    """Factory reading botId/secret from a JSON file (gitignore-covered path)."""
-    from pathlib import Path
+    """Create the target-specific client and load credentials from local JSON.
 
+    chat_type=1 selects WecomPrivateBotClient; chat_type=2 selects
+    WecomGroupBotClient. The default preserves the original group behavior.
+    """
+    if isinstance(chat_type, bool) or chat_type not in (1, 2):
+        raise ValueError("chat_type must be 1 (single) or 2 (group)")
+    client_class = WecomPrivateBotClient if chat_type == 1 else WecomGroupBotClient
     data = json.loads(Path(str(secrets_path).replace("\\", "/")).read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not str(data.get("botId", "")).strip() or not str(data.get("secret", "")).strip():
         raise ValueError(f"secrets file must contain botId and secret: {secrets_path}")
-    return WecomBotClient(
+    return client_class(
         str(data["botId"]).strip(),
         str(data["secret"]).strip(),
         connect_timeout=connect_timeout,

@@ -36,16 +36,21 @@
 
 ### Requirement: 主动推送回执
 
-主动推送 MUST 使用协议的主动发送通道，消息体携带目标 chatid 与 markdown 内容；发送结果以请求标识对应的回执为准，回执 errcode 为 0 记成功，非 0 记失败并保留错误码与摘要供留痕。
+主动推送 MUST 使用协议的主动发送通道，消息体携带目标 chatid、chat_type 与 markdown 内容；chat_type=1 时 chatid 为用户 userid，目标为私聊，chat_type=2 时 chatid 为群 chatid，目标为群聊。缺少 chatType 配置时 MUST 按群聊兼容。发送结果以请求标识对应的回执为准，回执 errcode 为 0 记成功，非 0 记失败并保留错误码与摘要供留痕。
 
-#### Scenario: 推送成功
+#### Scenario: 群聊推送成功
 
-- **WHEN** 向有效 chatid 发送 markdown 且回执 errcode 为 0
+- **WHEN** 以 chat_type=2 向有效群 chatid 发送 markdown 且回执 errcode 为 0
 - **THEN** 本次推送记为成功
+
+#### Scenario: 私聊推送成功
+
+- **WHEN** 以 chat_type=1 向已完成私聊交互的用户 userid 发送 markdown 且回执 errcode 为 0
+- **THEN** 本次推送记为成功，消息送达该用户与机器人的私聊
 
 #### Scenario: 目标失效报错
 
-- **WHEN** chatid 因机器人被移出群而失效
+- **WHEN** chatid 因目标会话失效而无法送达
 - **THEN** 回执非 0，失败被留痕，下轮重试持续可见
 
 ### Requirement: 连接独占约束

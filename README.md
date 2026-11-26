@@ -1,6 +1,6 @@
 # kimiclaw-monitor-messages
 
-内网信息监控系统：轮询内网页面 → 规则过滤重要性 → 企业微信群推送。核心链路纯 Python、无 LLM 依赖；可选叠加 Kimi Claw（OpenClaw），直接在群里 @机器人 提需求变更。
+内网信息监控系统：轮询内网页面 → 规则过滤重要性 → 企业微信会话推送（群聊或私聊）。核心链路纯 Python、无 LLM 依赖；可选叠加 Kimi Claw（OpenClaw），直接在群里 @机器人 提需求变更。
 
 ```
 【推送链路】
@@ -10,7 +10,7 @@
                           通知器 ──规则判定──> 聚合 markdown
                              │
                              ▼
-                    企业微信智能机器人长连接 ──> 目标群
+              企业微信智能机器人长连接 ──> 目标会话（群聊/私聊）
 
 【需求链路（OpenClaw）】
 群里 @机器人 ──> Claw gateway ──草案协议──> 改写白名单配置
@@ -45,7 +45,7 @@ program/.env 的 BASH 注册清单 ───────────────
 3. 在创建页面底部切换为 **API 模式**，连接方式选择 **长连接**。长连接只需要部署机器能访问企业微信服务器，不需要公网 IP、域名备案或可信 IP。
 4. 完成创建后，保存机器人的 **BotID** 和 **Secret**。Secret 要区分大小写，不要发到群里或提交到 Git。
 5. 检查机器人的 **消息** 权限。如果调用时返回 `errcode 850002`，需要机器人创建者在 **工作台 → 智能机器人** 中完成消息权限授权。
-6. 把机器人加入接收告警的目标群。等第 6 步的 gateway 启动后，在群里 @机器人 发送一条消息，再用 `openclaw sessions list` 找到目标群 `chatid`。
+6. 准备接收告警的目标会话。群聊：把机器人加入目标群，等第 6 步的 gateway 启动后在群里 @机器人 发一条消息，再用 `openclaw sessions list` 找到群 `chatid`，并设置 `chatType: 2`。私聊：让目标用户给机器人发一条消息，从私聊回调记录用户 `userid`，并设置 `chatType: 1`。
 
 长连接的技术说明可查看 [企业微信官方文档](https://developer.work.weixin.qq.com/document/path/101463)。
 
@@ -167,7 +167,7 @@ vim state/secrets/wecom-bot.json
 #    { "botId": "你的BotID", "secret": "你的Secret" }
 ```
 
-按实际环境编辑 `src/.env` 和 `config/` 下的 JSON 文件，尤其是 `config/monitors.json` 的内网 URL 和 `config/notifier.json` 的目标群 `chatid`，详见下节「配置说明」。如果还没有 `chatid`，先启动一次 gateway，在目标群 @机器人 后执行 `openclaw sessions list`，找到后填入。
+按实际环境编辑 `src/.env` 和 `config/` 下的 JSON 文件，尤其是 `config/monitors.json` 的内网 URL，以及 `config/notifier.json` 的目标会话 `chatid` 和 `chatType`，详见下节「配置说明」。群聊目标设置 `chatType: 2`，如果还没有群 `chatid`，先启动一次 gateway，在目标群 @机器人 后执行 `openclaw sessions list` 获取；私聊目标设置 `chatType: 1`，`chatid` 填已在机器人私聊中发过消息的用户 `userid`。
 
 启动完整服务：
 
@@ -185,7 +185,7 @@ loginctl enable-linger <用户名>
 注意事项：
 
 - **同一 botId 连接独占**：一个机器人同时只能一处在线。不要用同一个机器人凭证部署第二套。项目通知器推送时会短暂借用连接，随后自动恢复 Claw。
-- 机器人被移出群再加回后，需要重新 @机器人 并核对 chatid。
+- 机器人被移出群再加回后，需要重新 @机器人 并核对群 chatid；私聊推送失效时，让目标用户重新在私聊中给机器人发消息并核对 userid。
 - OpenClaw 的模型 Key、关联 token 和企微 Secret 都属于全局运行环境或凭证文件，不要写进项目配置、日志或 Git。
 
 ## 配置说明
@@ -196,7 +196,7 @@ loginctl enable-linger <用户名>
 | ------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `src/.env`                      | `DEFAULT_URL`、`DEFAULT_INTERVAL`、`DEFAULT_TIMEOUT`、`TIME_ZONE`、日志/锁路径、渲染限制 | 模块加载时读取，修改后重启对应服务                                                        |
 | `config/monitors.json`          | `url` 改成实际内网页面地址                                                               | 监控目标清单；`profile` 描述页面结构（如只认 `.csv` 链接），多目标可加多项                |
-| `config/notifier.json`          | `chatid`、`sourceUrl`、`templateFile`                                                    | 通知器 JSON 配置                                                                          |
+| `config/notifier.json`          | `chatid`、`chatType`、`sourceUrl`、`templateFile`                                        | 通知器 JSON 配置；`chatType: 1` 为私聊、`2` 为群聊，缺省按群聊处理                        |
 | `config/intranet-versions.json` | `match` 填关注的版本号/字段                                                              | 命中字段的文件集合变化时额外记版本快照；空数组 `[]` = 停用该功能                          |
 | `config/triage-rules.json`      | 按需调整                                                                                 | 重要性规则：新增/删除文件默认推、错误推送类型、文件名 suppress/include 过滤。默认值即可跑 |
 
@@ -287,7 +287,7 @@ kimiclaw-monitor-messages/
 │   ├── program_manager.py             # program/ 脚本查询、启动、停止
 │   ├── io.py                          # Output / IntranetOutput / ProgramOutput / ChatLogger
 │   ├── bot_tool.py                    # 连接编排：借线推送 / 拉活 Claw / 失败退避
-│   └── wecom_bot_client.py            # 企微机器人长连接协议层（纯传输）
+│   └── wecom_bot_client.py            # 企微长连接基类 + 群聊/私聊客户端与目标工厂
 ├── program/                    # 通用受管 Bash 脚本及调用说明
 ├── skills/
 │   ├── ff-config-assistant/SKILL.md   # @机器人 需求变更草案协议（可选 OpenClaw 用）

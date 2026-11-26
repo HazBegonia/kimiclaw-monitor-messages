@@ -1,5 +1,6 @@
 {
-  "chatid": "<目标群 chatid,群里 @机器人 后发一条消息后获取>",
+  "chatid": "<群聊填群 chatid；私聊填用户 userid>",
+  "chatType": 2,
   "secretsFile": "state/secrets/wecom-bot.json",
   "pollIntervalSeconds": 10,
   "diffLogDir": "logs/intranet-diff",

@@ -7,7 +7,7 @@
 | 组件         | unit                                | 职责                                                                                                                               |
 | ------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | 采集器       | `kimiclaw-monitor.service`          | 每 10 秒抓内网页面 → 变化写 `logs/intranet-diff/`、版本快照(仅变化时)写 `logs/intranet-focus/<id>/`、错误写 `logs/intranet-error/` |
-| 通知器       | `kimiclaw-notifier.service`         | 每 10 秒按游标消费日志 → 规则引擎判定(`config/triage-rules.json`)→ 重要则聚合一条 markdown 经 FF 长连接推企微群,推完拉活 Claw      |
+| 通知器       | `kimiclaw-notifier.service`         | 每 10 秒按游标消费日志 → 规则引擎判定(`config/triage-rules.json`)→ 重要则聚合一条 markdown 经 FF 长连接推企微目标会话(群聊或私聊),推完拉活 Claw      |
 | Claw gateway | `kimiclaw-openclaw-gateway.service` | `openclaw gateway run`,收上级 @FF 需求;不参与推送                                                                                  |
 
 三服务**互不依赖**,可单独启停。均为 `Restart=always`;linger 已开启,开机自启、注销不掉。
@@ -50,7 +50,7 @@ python -m src.intranet_notifier --once --dry-run
 | `config/monitors.json`           | 监控目标(URL、id)                                                                                       | 下一轮扫描生效                                                    |
 | `config/intranet-versions.json`  | 版本选择清单                                                                                            | 下一轮扫描生效(空数组=停用版本快照)                               |
 | `config/triage-rules.json`       | 重要性规则(diff/error/抖动抑制/升级窗口/文件名抑制 filenamePatterns/文件名关注 filenameIncludePatterns) | 通知器热读,下一轮生效;坏文件或含未知字段自动回退 last-good 并告警 |
-| `config/notifier.json`           | chatid、目录、游标文件、secrets 路径、模板路径、超时                                                    | 通知器配置                                                        |
+| `config/notifier.json`           | chatid、chatType(1 私聊/2 群聊)、目录、游标文件、secrets 路径、模板路径、超时                        | 推送目标下一次发送生效,其余启动配置重启通知器生效               |
 | `templates/notify-template.json` | 推送标题、来源、区块内容与顺序、错误摘要、截断提示                                                      | 有消息要发送时热读,下一次通知生效                                 |
 | `src/.env`                       | DEFAULT_URL、DEFAULT_INTERVAL、DEFAULT_TIMEOUT、时区、日志与锁路径、渲染限制                            | 模块加载时读取,修改后重启对应服务                                 |
 
@@ -71,7 +71,7 @@ python -m src.intranet_notifier --once --dry-run
 
 常见问题:
 
-- **群里收不到消息**:先 `python -m src.intranet_notifier --once --dry-run` 看渲染结果是否命中规则;再看 notify 留痕是否 `wecom-send` 报错(认证/超时/被顶)。FF 主动推送前置条件:群里须有人 @FF 发过消息;机器人被移出群再加回后需重新 @FF 并核对 `config/notifier.json` 的 chatid。
+- **目标会话收不到消息**:先 `python -m src.intranet_notifier --once --dry-run` 看渲染结果是否命中规则;再看 notify 留痕是否 `wecom-send` 报错(认证/超时/被顶)。核对 `config/notifier.json` 的 `chatid` 与 `chatType`(1 私聊/2 群聊)是否匹配。FF 主动推送前置条件:群聊须有人 @FF 发过消息,私聊须由目标用户给 FF 发过消息;机器人被移出群再加回后需重新 @FF 并核对群 chatid。
 - **Claw 不回 @FF 消息**:查 `state/bot-tool-state.json` 是否有 `pendingRestore` 欠账未补;通知器每轮会自动补拉活,也可手动 `systemctl --user restart kimiclaw-openclaw-gateway`。
 - **连接被顶(disconnected_event)**:FF botId 连接独占,确认没有第二处(如旧 Windows 机器)持同一凭证在线。
 - **改了 config 没生效**:采集器/通知器均为下一轮热读;若改的是 `~/.openclaw/openclaw.json`,需重启 gateway 服务。

@@ -146,7 +146,7 @@ def _restore_companion(
 # ---------------------------------------------------------------- config
 
 def _load_push_config(path: Path) -> dict[str, Any]:
-    """Tool layer reads chatid/secrets path/timeouts itself; callers stay dumb."""
+    """Tool layer reads target/secrets path/timeouts itself; callers stay dumb."""
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -155,11 +155,15 @@ def _load_push_config(path: Path) -> dict[str, Any]:
         raise BotToolError(f"notifier config must be an object: {path}")
     chatid = str(data.get("chatid") or "").strip()
     if not chatid:
-        raise BotToolError("config.chatid is required (target group)")
+        raise BotToolError("config.chatid is required (target conversation)")
+    chat_type = data.get("chatType", 2)
+    if isinstance(chat_type, bool) or not isinstance(chat_type, int) or chat_type not in (1, 2):
+        raise BotToolError("config.chatType must be 1 (single) or 2 (group)")
     secrets_file = str(data.get("secretsFile") or "state/secrets/wecom-bot.json").strip()
     timeouts = data.get("timeouts") if isinstance(data.get("timeouts"), dict) else {}
     return {
         "chatid": chatid,
+        "chatType": chat_type,
         "secretsFile": secrets_file,
         "connectTimeout": float(timeouts.get("connect", 10)),
         "ackTimeout": float(timeouts.get("ack", 15)),
@@ -178,7 +182,7 @@ def push_markdown(
     cli_run: Callable[..., Any] = subprocess.run,
     now: Callable[[], float] = time.time,
 ) -> None:
-    """Push one markdown message to the target group, then revive the companion.
+    """Push one markdown message to the target conversation, then revive the companion.
 
     Raises on send failure (callers keep their cursor and retry per the
     persisted backoff). A failed revive never fails the push: the debt stays in
@@ -194,10 +198,12 @@ def push_markdown(
             f"retry not before {datetime.fromtimestamp(backoff['nextRetryAt'], TIME_ZONE).isoformat()}"
         )
     if client_factory is None:
+        # Select the group/private implementation once; sending stays target-agnostic.
         client_factory = lambda: make_client_from_secrets(  # noqa: E731
             Path(cfg["secretsFile"]),
             connect_timeout=cfg["connectTimeout"],
             ack_timeout=cfg["ackTimeout"],
+            chat_type=cfg["chatType"],
         )
 
     # Debt BEFORE connecting: the connect itself kicks the companion.

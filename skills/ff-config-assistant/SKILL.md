@@ -20,7 +20,7 @@ user-invocable: true
 
 所有文件操作使用绝对路径。执行校验命令时，工作目录必须是项目根目录。
 
-- 项目根：`/home/u504/kimiclaw-monitor-messages`，下称 `<root>`
+- 项目根：`/home/u504/.openclaw/workspace/kimiclaw-monitor-messages`，下称 `<root>`
 - Python：`/home/u504/anaconda3/envs/kimiclaw-monitor-messages/bin/python`，下称 `<python>`
 - 草案台账：`<root>/state/chat-drafts.json`
 - 留痕目录：`<root>/logs/intranet-notify/`
@@ -75,7 +75,7 @@ user-invocable: true
 | 增加、删除关注字段或版本号；修改匹配模式                   | `config/intranet-versions.json` 的 `selectedVersions` | `<python> -c "from pathlib import Path; from src.intranet_filename_monitor import load_selected_versions; load_selected_versions(Path('config/intranet-versions.json'))"` |
 | 更换监控 URL；增删监控目标；修改抓取扩展名                 | `config/monitors.json` 的 `targets`                   | `<python> -c "from pathlib import Path; from src.intranet_filename_monitor import load_monitors_config; load_monitors_config(Path('config/monitors.json'))"`              |
 | 调整新增、删除和错误是否推送；调整抖动升级；调整文件名过滤 | `config/triage-rules.json` 中本手册列出的规则键       | `<python> -c "from pathlib import Path; from src.triage_rules import load_rules; load_rules(Path('config/triage-rules.json'))"`                                           |
-| 更换推送目标群                                             | `config/notifier.json` 的 `chatid`，其他键不得修改    | `<python> -c "import json; d=json.load(open('config/notifier.json')); assert d['chatid']"`                                                                                |
+| 更换推送目标会话（群聊或私聊）                       | `config/notifier.json` 的 `chatid` 与 `chatType`，其他键不得修改 | `<python> -c "import json; d=json.load(open('config/notifier.json')); assert d['chatid']; assert d.get('chatType', 2) in (1, 2)"`                                     |
 | 修改通知文案、区块内容或顺序                               | `templates/notify-template.json`                      | `<python> -c "from pathlib import Path; from src.io import IntranetOutput; IntranetOutput.from_file(Path('templates/notify-template.json'))"`                             |
 
 如果请求无法对应到一个明确目标和明确键值，先追问。不要发明新配置键，不要修改代码来支持请求。
@@ -250,15 +250,16 @@ user-invocable: true
 
 生效时机：写入成功后，通知器下一轮重新加载规则时生效。
 
-### 修改推送目标群
+### 修改推送目标会话
 
-目标文件：`config/notifier.json`，只允许修改 `chatid`。
+目标文件：`config/notifier.json`，只允许修改 `chatid` 与 `chatType`。
 
 1. 读取完整配置。
-2. 只替换 `chatid`，其他键和值保持不变。
-3. 在草案回显中说明目标群将发生变化，但不要泄露任何凭证。
+2. 群聊设置 `chatType: 2`，`chatid` 填群内 @机器人 后获取的群 chatid；私聊设置 `chatType: 1`，`chatid` 填用户在机器人私聊回调中的 userid。
+3. 切换会话类型时同时修改这两个键，其他键和值保持不变。目标私聊必须已由该用户给机器人发过消息，不能仅凭姓名猜测 userid。
+4. 在草案回显中说明目标会话类型和标识将发生变化，但不要泄露任何凭证。
 
-生效时机：当前通知器只在启动时读取该文件。写入成功后需要人工重启 `kimiclaw-notifier.service`，重启前仍使用旧配置。不要在重启前声称新群已经生效。
+生效时机：推送目标由 `bot_tool` 在每次发送时重新读取，写入成功后的下一次推送使用新目标，不需要重启通知器。不要在真实发送成功前声称新目标已经可用。
 
 ### 修改通知模板
 

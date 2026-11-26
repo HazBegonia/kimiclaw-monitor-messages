@@ -1,6 +1,6 @@
 {
-  "chatid": "<群聊填群 chatid；私聊填用户 userid>",
-  "chatType": 2,
+  "chatid": "<群聊填群 chatid 下面 chatType 填 1；私聊填用户 userid 下面 chatType 填 2>",
+  "chatType": 1,
   "secretsFile": "state/secrets/wecom-bot.json",
   "pollIntervalSeconds": 10,
   "diffLogDir": "logs/intranet-diff",
